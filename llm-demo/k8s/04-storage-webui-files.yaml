@@ -1,0 +1,19 @@
+# Azure Files Premium storage for Open-WebUI data
+# Provides ReadWriteMany (RWX) access for horizontal scaling
+# Stores: embedding models, user uploads, image/audio cache
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: open-webui-files-pvc
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: open-webui
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple pods can access simultaneously
+  storageClassName: azurefile-premium-llm
+  resources:
+    requests:
+      storage: 20Gi  # Increased from 10Gi for production use

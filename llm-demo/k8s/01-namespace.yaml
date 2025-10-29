@@ -1,0 +1,10 @@
+# Namespace for Ollama LLM workloads
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ollama
+  labels:
+    name: ollama
+    app.kubernetes.io/name: ollama-llm-demo
+    app.kubernetes.io/component: ai-inference
+    app.kubernetes.io/managed-by: kubecon-demo

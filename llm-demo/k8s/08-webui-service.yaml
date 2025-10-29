@@ -1,0 +1,22 @@
+# Public LoadBalancer service for Open-WebUI
+# Exposes the chat interface to demo attendees
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-webui
+  namespace: ollama
+  labels:
+    app: open-webui
+    app.kubernetes.io/name: open-webui
+    app.kubernetes.io/component: web-frontend
+spec:
+  type: LoadBalancer
+  selector:
+    app: open-webui
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8080
+  sessionAffinity: ClientIP  # Maintain user sessions

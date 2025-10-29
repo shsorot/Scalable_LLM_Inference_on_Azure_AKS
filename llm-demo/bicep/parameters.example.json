@@ -1,0 +1,28 @@
+# Bicep deployment parameters - EXAMPLE FILE
+# Copy this to `parameters.json` and fill in your values
+# DO NOT commit parameters.json with secrets to Git
+
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "prefix": {
+      "value": "kubecon"
+    },
+    "location": {
+      "value": "westus2"
+    },
+    "gpuVmSize": {
+      "value": "Standard_NC6s_v3"
+    },
+    "gpuNodeCount": {
+      "value": 2
+    },
+    "huggingFaceToken": {
+      "value": "YOUR_HF_TOKEN_HERE"
+    },
+    "kubernetesVersion": {
+      "value": "1.30.4"
+    }
+  }
+}

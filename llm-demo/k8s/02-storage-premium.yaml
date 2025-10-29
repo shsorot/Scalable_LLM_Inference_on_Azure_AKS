@@ -1,0 +1,40 @@
+# Azure Files Premium storage for Ollama model storage
+# Provides high IOPS for fast model loading and inference
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azurefile-premium-llm
+  labels:
+    app.kubernetes.io/name: ollama-llm-demo
+provisioner: file.csi.azure.com
+allowVolumeExpansion: true
+mountOptions:
+  - dir_mode=0777
+  - file_mode=0777
+  - uid=0
+  - gid=0
+  - mfsymlinks
+  - cache=strict
+  - actimeo=30
+  - nosharesock
+parameters:
+  skuName: Premium_LRS  # Premium for low latency
+  protocol: smb
+  enableLargeFileShares: "true"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models-pvc
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteMany  # Allow multiple pods to access (future scale-out)
+  storageClassName: azurefile-premium-llm
+  resources:
+    requests:
+      storage: 100Gi  # Space for multiple LLM models

@@ -1,0 +1,149 @@
+# Open-WebUI - Web-based chat interface for Ollama
+# Deployment with Azure Files Premium for data persistence and PGVector for RAG
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: ollama
+  labels:
+    app: open-webui
+    app.kubernetes.io/name: open-webui
+    app.kubernetes.io/component: web-frontend
+spec:
+  replicas: 3  # Scaled to 3 replicas for high availability
+  selector:
+    matchLabels:
+      app: open-webui
+  template:
+    metadata:
+      labels:
+        app: open-webui
+        app.kubernetes.io/name: open-webui
+        app.kubernetes.io/component: web-frontend
+    spec:
+      # Run on system nodes (no GPU needed)
+      nodeSelector:
+        workload: system
+
+      # Tolerate system node taints
+      tolerations:
+        - key: "CriticalAddonsOnly"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+
+      containers:
+        - name: open-webui
+          image: ghcr.io/open-webui/open-webui:main
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+
+          # Environment configuration
+          env:
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama.ollama.svc.cluster.local:11434"
+            - name: WEBUI_AUTH
+              value: "True"  # Enable authentication
+            - name: WEBUI_NAME
+              value: "Azure LLM Demo with PostgreSQL + PGVector - KubeCon NA 2025"
+
+            # Session secret key from Kubernetes secret
+            - name: WEBUI_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ollama-secrets
+                  key: openwebui-secret-key
+
+            # Database configuration - Azure PostgreSQL Flexible Server
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ollama-secrets
+                  key: postgres-connection-string
+
+            # Vector Database configuration - PGVector (shared across replicas)
+            - name: VECTOR_DB
+              value: "pgvector"
+            - name: PGVECTOR_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ollama-secrets
+                  key: postgres-connection-string
+            
+            # PGVector configuration for optimal performance
+            - name: PGVECTOR_CREATE_EXTENSION
+              value: "false"  # Extension already created manually
+            - name: PGVECTOR_INITIALIZE_MAX_VECTOR_LENGTH
+              value: "384"  # Match sentence-transformers/all-MiniLM-L6-v2 model
+            - name: PGVECTOR_POOL_SIZE
+              value: "10"  # Connection pool per pod
+            - name: PGVECTOR_POOL_MAX_OVERFLOW
+              value: "5"
+            - name: PGVECTOR_POOL_TIMEOUT
+              value: "30"
+            - name: PGVECTOR_POOL_RECYCLE
+              value: "3600"
+
+            - name: ENV
+              value: "prod"
+            - name: DATA_DIR
+              value: "/app/backend/data"
+            
+            # RAG features enabled (now using PGVector)
+            - name: ENABLE_RAG_WEB_SEARCH
+              value: "False"
+            - name: ENABLE_RAG_LOCAL_WEB_FETCH
+              value: "False"
+
+          # Volume mounts for persistent data
+          volumeMounts:
+            - name: webui-data
+              mountPath: /app/backend/data
+
+          # Startup probe - gives app up to 10 minutes to start (30 failures * 20 sec = 600 sec)
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 30
+
+          # Liveness probe
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10  # Startup probe handles initial delay
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          # Readiness probe
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10  # Startup probe handles initial delay
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6  # Allow more failures during startup
+
+      volumes:
+        - name: webui-data
+          persistentVolumeClaim:
+            claimName: open-webui-files-pvc  # Azure Files Premium (RWX)

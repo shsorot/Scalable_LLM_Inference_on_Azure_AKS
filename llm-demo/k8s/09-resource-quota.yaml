@@ -1,0 +1,35 @@
+# Resource quota for ollama namespace to prevent runaway costs
+# Limits total resources that can be consumed by all pods
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ollama-quota
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama-llm-demo
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    # Limit total number of pods (prevent pod spawn attacks)
+    pods: "10"
+
+    # Limit total CPU across all pods (prevent CPU exhaustion)
+    requests.cpu: "24"      # Max: 2 Ollama pods (4 CPU each) + 1 WebUI (0.5 CPU) + overhead
+    limits.cpu: "32"        # Max: 2 Ollama pods (8 CPU each) + 1 WebUI (2 CPU) + overhead
+
+    # Limit total memory across all pods
+    requests.memory: "48Gi"  # Max: 2 Ollama (16Gi each) + 1 WebUI (1Gi) + overhead
+    limits.memory: "80Gi"    # Max: 2 Ollama (32Gi each) + 1 WebUI (4Gi) + overhead
+
+    # Limit GPU allocation (most critical for cost control)
+    requests.nvidia.com/gpu: "2"  # Max 2 GPUs total
+    limits.nvidia.com/gpu: "2"
+
+    # Limit storage claims
+    persistentvolumeclaims: "5"  # Max 5 PVCs
+    requests.storage: "500Gi"    # Max total storage
+
+    # Limit services (prevent accidental multiple LoadBalancers)
+    services.loadbalancers: "1"  # Only 1 public IP
+    services: "10"               # Max 10 services total

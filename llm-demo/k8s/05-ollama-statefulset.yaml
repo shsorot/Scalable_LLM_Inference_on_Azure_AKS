@@ -1,0 +1,121 @@
+# Ollama LLM server - StatefulSet for persistent model storage
+# Runs on GPU nodes with Azure Files Premium for model data
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ollama
+  namespace: ollama
+  labels:
+    app: ollama
+    app.kubernetes.io/name: ollama
+    app.kubernetes.io/component: llm-server
+spec:
+  serviceName: ollama
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+        app.kubernetes.io/name: ollama
+        app.kubernetes.io/component: llm-server
+    spec:
+      # Schedule on GPU nodes
+      nodeSelector:
+        workload: llm
+        gpu: "true"
+
+      # Tolerate GPU node taints
+      tolerations:
+        - key: "sku"
+          operator: "Equal"
+          value: "gpu"
+          effect: "NoSchedule"
+
+      # Avoid scheduling on system nodes
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: workload
+                    operator: In
+                    values:
+                      - llm
+
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 11434
+              protocol: TCP
+
+          # Resource requests optimized for T4 GPU (16GB VRAM)
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"  # Request 1 GPU
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+
+          # Environment variables
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            - name: OLLAMA_ORIGINS
+              value: "*"  # Allow CORS for WebUI
+            - name: OLLAMA_NUM_PARALLEL
+              value: "2"  # Concurrent requests
+            - name: OLLAMA_MAX_LOADED_MODELS
+              value: "1"  # Keep one model in memory
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: huggingface-token
+                  key: token
+                  optional: true
+
+          # Volume mounts for persistent model storage
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+              subPath: ollama  # Organize within PVC
+
+          # Liveness probe - check if Ollama API is responsive
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          # Readiness probe - ensure Ollama is ready to serve
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Enable TTY for interactive model loading
+          tty: true
+          stdin: true
+
+      # Use existing PVC (not volumeClaimTemplates for easier management)
+      volumes:
+        - name: ollama-data
+          persistentVolumeClaim:
+            claimName: ollama-models-pvc

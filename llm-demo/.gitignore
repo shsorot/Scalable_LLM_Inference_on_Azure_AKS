@@ -1,0 +1,54 @@
+# Temporary files
+temp/
+*.log
+*.tmp
+
+# Booth demo generated files (created at deployment time)
+booth-card.html
+booth-qr-*.png
+demo-accounts.csv
+admin-credentials.txt
+*-credentials.txt
+
+# PowerShell transcripts
+PowerShell_transcript*.txt
+
+# Bicep compiled files
+*.json.bak
+parameters.json
+
+# Kubernetes local config
+kubeconfig
+*.kubeconfig
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Azure CLI cache
+.azure/
+
+# Python cache (if using Python tools)
+__pycache__/
+*.pyc
+*.pyo
+
+# Node modules (if using JS tools)
+node_modules/
+
+# Secrets (DO NOT COMMIT)
+*.key
+*.pem
+*.pfx
+*.p12
+secrets.yaml
+.env
+.env.local
