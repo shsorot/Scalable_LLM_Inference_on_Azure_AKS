@@ -75,6 +75,17 @@ resource database 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2023-03-0
   }
 }
 
+// === Server Configuration ===
+// Enable vector and uuid-ossp extensions at server level (required for PGVector)
+resource allowedExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2023-03-01-preview' = {
+  parent: postgresServer
+  name: 'azure.extensions'
+  properties: {
+    value: 'VECTOR,UUID-OSSP'
+    source: 'user-override'
+  }
+}
+
 // === Outputs ===
 output postgresServerName string = postgresServer.name
 output postgresServerFqdn string = postgresServer.properties.fullyQualifiedDomainName

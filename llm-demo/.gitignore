@@ -10,6 +10,10 @@ demo-accounts.csv
 admin-credentials.txt
 *-credentials.txt
 
+# Script-generated temporary files
+monitoring-values.yaml
+*-setup-pod.yaml
+
 # PowerShell transcripts
 PowerShell_transcript*.txt
 

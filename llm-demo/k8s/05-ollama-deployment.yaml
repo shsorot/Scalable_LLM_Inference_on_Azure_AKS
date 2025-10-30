@@ -1,0 +1,167 @@
+# Ollama Deployment (converted from StatefulSet)
+# Enables horizontal scaling with shared model storage
+# Multiple replicas share the same Azure Files Premium volume with models
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ollama
+  labels:
+    app: ollama
+    app.kubernetes.io/name: ollama
+    app.kubernetes.io/component: llm-server
+spec:
+  replicas: 2  # Start with 2 for HA, HPA will manage scaling
+
+  # Rolling update strategy
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # Max 1 extra pod during update
+      maxUnavailable: 0  # Keep all pods available during update
+
+  selector:
+    matchLabels:
+      app: ollama
+
+  template:
+    metadata:
+      labels:
+        app: ollama
+        app.kubernetes.io/name: ollama
+        app.kubernetes.io/component: llm-server
+    spec:
+      # Schedule on GPU nodes
+      nodeSelector:
+        workload: llm
+        gpu: "true"
+
+      # Tolerate GPU node taints
+      tolerations:
+        - key: "sku"
+          operator: "Equal"
+          value: "gpu"
+          effect: "NoSchedule"
+
+      # Spread pods across nodes for HA
+      affinity:
+        # Prefer different nodes
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - ollama
+                topologyKey: kubernetes.io/hostname
+
+        # Require GPU nodes
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: workload
+                    operator: In
+                    values:
+                      - llm
+
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 11434
+              protocol: TCP
+
+          # Resource requests optimized for T4 GPU (16GB VRAM)
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"  # Each pod gets 1 GPU
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+
+          # Environment variables for multi-pod configuration
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            - name: OLLAMA_ORIGINS
+              value: "*"  # Allow CORS for WebUI
+            - name: OLLAMA_NUM_PARALLEL
+              value: "4"  # Increased for multiple pods
+            - name: OLLAMA_MAX_LOADED_MODELS
+              value: "2"  # Allow 2 models in memory per pod
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: huggingface-token
+                  key: token
+                  optional: true
+            # Pod identity for debugging
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+
+          # Volume mounts for shared model storage (Azure Files RWX)
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+              subPath: ollama
+
+          # Liveness probe
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          # Readiness probe
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Startup probe - allow time for model loading
+          startupProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30  # 5 minutes total
+
+          # Enable TTY for interactive model loading
+          tty: true
+          stdin: true
+
+      # Shared model storage - all pods access same models
+      volumes:
+        - name: ollama-data
+          persistentVolumeClaim:
+            claimName: ollama-models-pvc  # Azure Files Premium (RWX)

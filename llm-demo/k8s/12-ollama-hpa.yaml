@@ -1,0 +1,81 @@
+# Horizontal Pod Autoscaler for Ollama
+# Scales based on GPU memory utilization
+# Requires: DCGM Exporter + Prometheus + Metrics Server
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ollama-hpa
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama
+    app.kubernetes.io/component: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ollama
+
+  # Scaling boundaries
+  minReplicas: 2   # Minimum for HA and model diversity
+  maxReplicas: 5   # Limited by GPU node availability (will trigger cluster autoscaler)
+
+  # Scaling metrics
+  metrics:
+    # Primary: GPU memory utilization
+    # Note: Requires Prometheus Adapter with custom metrics
+    # Metric format: DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_TOTAL
+    - type: Pods
+      pods:
+        metric:
+          name: gpu_memory_utilization
+        target:
+          type: AverageValue
+          averageValue: "70"  # Scale up when avg GPU memory > 70%
+
+    # Fallback: CPU utilization (for non-inference workload)
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+
+    # Memory utilization (system RAM)
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+  # Scaling behavior - conservative for GPU workloads
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600  # Wait 10 min before scaling down (models in memory)
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 300  # Remove max 1 pod per 5 minutes
+      selectPolicy: Min
+
+    scaleUp:
+      stabilizationWindowSeconds: 60  # Quick scale up for GPU demand
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60  # Add 1 pod per minute
+      selectPolicy: Max
+---
+# NOTE: GPU memory metrics require additional setup:
+# 1. DCGM Exporter (11-dcgm-exporter.yaml) - deploys GPU metrics
+# 2. Prometheus - scrapes DCGM metrics
+# 3. Prometheus Adapter - exposes custom metrics to HPA
+#
+# For initial demo without custom metrics, this HPA will use CPU/memory only.
+# GPU metric will be ignored until Prometheus Adapter is configured.
+#
+# To enable GPU metrics:
+# 1. Deploy Prometheus (via Helm): helm install prometheus prometheus-community/kube-prometheus-stack
+# 2. Deploy Prometheus Adapter with custom rules for DCGM metrics
+# 3. Verify metrics: kubectl get --raw "/apis/custom.metrics.k8s.io/v1beta1" | jq .

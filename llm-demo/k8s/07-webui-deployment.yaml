@@ -58,7 +58,7 @@ spec:
             - name: WEBUI_AUTH
               value: "True"  # Enable authentication
             - name: WEBUI_NAME
-              value: "Azure LLM Demo with PostgreSQL + PGVector - KubeCon NA 2025"
+              value: "LLMs on AKS Made Easy - From Zero to Production in Minutes"
 
             # Session secret key from Kubernetes secret
             - name: WEBUI_SECRET_KEY
@@ -82,7 +82,7 @@ spec:
                 secretKeyRef:
                   name: ollama-secrets
                   key: postgres-connection-string
-            
+
             # PGVector configuration for optimal performance
             - name: PGVECTOR_CREATE_EXTENSION
               value: "false"  # Extension already created manually
@@ -101,7 +101,7 @@ spec:
               value: "prod"
             - name: DATA_DIR
               value: "/app/backend/data"
-            
+
             # RAG features enabled (now using PGVector)
             - name: ENABLE_RAG_WEB_SEARCH
               value: "False"

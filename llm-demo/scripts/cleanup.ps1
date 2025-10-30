@@ -7,6 +7,7 @@
     - Azure resource group (AKS, Key Vault, Storage)
     - Optional: Keep resource group but delete K8s resources only
     - Optional: Delete only user data (for multi-day booth demo)
+    - Optional: Wipe PostgreSQL database content (for fresh deployments)
 .PARAMETER Prefix
     Prefix used during deployment
 .PARAMETER KeepResourceGroup
@@ -14,6 +15,10 @@
 .PARAMETER DataOnly
     Delete only user data (WebUI database), keep all infrastructure.
     Useful for resetting demo between event days while keeping the deployment running.
+.PARAMETER WipeDatabase
+    Drop and recreate PostgreSQL database to remove all data.
+    Use this before redeployment to ensure clean state.
+    Database structure will be recreated by Open-WebUI on next startup.
 .PARAMETER Force
     Skip confirmation prompts
 .EXAMPLE
@@ -21,7 +26,10 @@
     Full cleanup - deletes everything
 .EXAMPLE
     .\cleanup.ps1 -Prefix "kubecon" -KeepResourceGroup -Force
-    Delete K8s resources, keep Azure infrastructure
+    Delete K8s resources, keep Azure infrastructure, preserve database
+.EXAMPLE
+    .\cleanup.ps1 -Prefix "kubecon" -KeepResourceGroup -WipeDatabase -Force
+    Delete K8s resources, wipe database content, keep infrastructure
 .EXAMPLE
     .\cleanup.ps1 -Prefix "kubecon" -DataOnly
     Reset user data only (for multi-day events)
@@ -39,6 +47,9 @@ param(
 
     [Parameter(Mandatory=$false)]
     [switch]$DataOnly,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$WipeDatabase,
 
     [Parameter(Mandatory=$false)]
     [switch]$Force
@@ -61,6 +72,13 @@ Write-Host "$namespace" -ForegroundColor Yellow
 if ($KeepResourceGroup) {
     Write-Host "Cleanup Mode       : " -NoNewline -ForegroundColor White
     Write-Host "Kubernetes resources only (keep Azure infra)" -ForegroundColor Cyan
+    if ($WipeDatabase) {
+        Write-Host "Database Mode      : " -NoNewline -ForegroundColor White
+        Write-Host "Wipe database content (fresh state)" -ForegroundColor Yellow
+    } else {
+        Write-Host "Database Mode      : " -NoNewline -ForegroundColor White
+        Write-Host "Preserve database content" -ForegroundColor Green
+    }
 } elseif ($DataOnly) {
     Write-Host "Cleanup Mode       : " -NoNewline -ForegroundColor White
     Write-Host "User data only (reset demo for next day)" -ForegroundColor Cyan
@@ -159,6 +177,56 @@ if ($?) {
     }
 } else {
     Write-Host "  [INFO] No kubectl context found (cluster may already be deleted)" -ForegroundColor Gray
+}
+
+# Wipe PostgreSQL database if requested
+if ($WipeDatabase -and $KeepResourceGroup) {
+    Write-Host "`n[DATABASE] Wiping PostgreSQL database content..." -ForegroundColor Yellow
+
+    # Get PostgreSQL server name
+    $pgServers = az postgres flexible-server list --resource-group $resourceGroup --query "[].name" -o tsv 2>$null
+
+    if ($pgServers) {
+        $pgServerName = $pgServers.Split("`n")[0].Trim()
+        Write-Host "  -> Found PostgreSQL server: $pgServerName" -ForegroundColor Gray
+
+        # Get admin password from Key Vault
+        $kvNames = az keyvault list --resource-group $resourceGroup --query "[].name" -o tsv 2>$null
+        if ($kvNames) {
+            $kvName = $kvNames.Split("`n")[0].Trim()
+            Write-Host "  -> Retrieving admin password from Key Vault..." -ForegroundColor Gray
+
+            $pgPassword = az keyvault secret show --vault-name $kvName --name postgres-admin-password --query value -o tsv 2>$null
+
+            if ($pgPassword) {
+                # Build connection string
+                $connStr = "host=$pgServerName.postgres.database.azure.com port=5432 dbname=openwebui user=pgadmin password=$pgPassword sslmode=require"
+
+                Write-Host "  -> Executing database wipe script..." -ForegroundColor Gray
+
+                # Use Python script to wipe database (more reliable than Azure CLI)
+                $scriptPath = Join-Path $PSScriptRoot "wipe-database.py"
+                if (Test-Path $scriptPath) {
+                    $result = python $scriptPath "$connStr" 2>&1
+
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host "  [OK] Database wiped successfully" -ForegroundColor Green
+                        Write-Host "  -> PGVector extensions will be recreated on next deployment" -ForegroundColor Gray
+                    } else {
+                        Write-Host "  [WARN] Database wipe failed: $result" -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "  [ERROR] wipe-database.py not found at $scriptPath" -ForegroundColor Red
+                }
+            } else {
+                Write-Host "  [WARN] Could not retrieve PostgreSQL password from Key Vault" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  [WARN] No Key Vault found in resource group" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  [INFO] No PostgreSQL server found in resource group" -ForegroundColor Gray
+    }
 }
 
 if (-not $KeepResourceGroup) {

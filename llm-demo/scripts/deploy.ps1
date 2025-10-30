@@ -517,11 +517,10 @@ Write-Success "Kubernetes secrets created (including PostgreSQL connection)"
 
 Write-Info "Deploying storage classes..."
 kubectl apply -f "$K8sManifestsDir/02-storage-premium.yaml"
-kubectl apply -f "$K8sManifestsDir/03-storageclass-disk.yaml"
-Write-Success "Storage classes deployed (Azure Files Premium + Azure Disk Premium)"
+Write-Success "Storage class deployed (Azure Files Premium)"
 
 Write-Info "Deploying Persistent Volume Claims..."
-Write-Info "  - Ollama models PVC (Azure Files Premium, 100GB)..."
+Write-Info "  - Ollama models PVC (Azure Files Premium, 1024GB / 1TB)..."
 Write-Info "  - Open-WebUI data PVC (Azure Files Premium, 20GB)..."
 kubectl apply -f "$K8sManifestsDir/04-storage-webui-files.yaml"
 Write-Success "PVCs created"
@@ -561,8 +560,13 @@ if ($elapsedSeconds -ge $maxWaitSeconds) {
     exit 1
 }
 
-Write-Info "Deploying Ollama server..."
-kubectl apply -f "$K8sManifestsDir/05-ollama-statefulset.yaml"
+Write-Info "Deploying Ollama server (Deployment with autoscaling)..."
+# Deploy either StatefulSet or Deployment based on what exists
+if (Test-Path "$K8sManifestsDir/05-ollama-deployment.yaml") {
+    kubectl apply -f "$K8sManifestsDir/05-ollama-deployment.yaml"
+} elseif (Test-Path "$K8sManifestsDir/05-ollama-statefulset.yaml") {
+    kubectl apply -f "$K8sManifestsDir/05-ollama-statefulset.yaml"
+}
 kubectl apply -f "$K8sManifestsDir/06-ollama-service.yaml"
 Write-Success "Ollama deployed"
 
@@ -579,14 +583,32 @@ kubectl apply -f "$K8sManifestsDir/07-webui-deployment.yaml"
 kubectl apply -f "$K8sManifestsDir/08-webui-service.yaml"
 Write-Success "Open-WebUI deployed"
 
+# Deploy autoscaling components
+Write-Info "Deploying Horizontal Pod Autoscalers..."
+if (Test-Path "$K8sManifestsDir/10-webui-hpa.yaml") {
+    kubectl apply -f "$K8sManifestsDir/10-webui-hpa.yaml"
+    Write-Success "Open-WebUI HPA deployed"
+}
+if (Test-Path "$K8sManifestsDir/12-ollama-hpa.yaml") {
+    kubectl apply -f "$K8sManifestsDir/12-ollama-hpa.yaml"
+    Write-Success "Ollama HPA deployed"
+}
+
+Write-Info "Deploying GPU monitoring (DCGM Exporter)..."
+if (Test-Path "$K8sManifestsDir/11-dcgm-exporter.yaml") {
+    kubectl apply -f "$K8sManifestsDir/11-dcgm-exporter.yaml"
+    Write-Success "DCGM Exporter deployed for GPU metrics"
+}
+
 Write-Info "Waiting for Open-WebUI pod to be ready (max 5 minutes)..."
 Write-Info "Note: First startup may take 2-3 minutes to download embedding model..."
 kubectl wait --for=condition=ready pod -l app=open-webui -n ollama --timeout=300s
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Open-WebUI pod did not become ready"
-    exit 1
+    Write-Warning "Open-WebUI pods not ready yet (may need PGVector extensions)"
+    Write-Info "Will enable PGVector extensions in next step..."
+} else {
+    Write-Success "Open-WebUI pods ready"
 }
-Write-Success "Open-WebUI pod ready"
 
 Write-StepHeader "Pre-Loading Multiple Models"
 
@@ -619,6 +641,346 @@ if (Test-Path $MultiModelScript) {
         Write-Info "No pre-load scripts found, skipping model pre-load"
     }
 }
+
+# ================================================================================
+# Step 7: Enable PGVector Extensions
+# ================================================================================
+Write-StepHeader "Enabling PGVector Extensions"
+
+Write-Info "Retrieving PostgreSQL server details..."
+# Extract server name from FQDN (format: servername.postgres.database.azure.com)
+$pgServerName = $postgresServerFqdn -replace '\.postgres\.database\.azure\.com$', ''
+$pgHost = $postgresServerFqdn
+
+Write-Info "PostgreSQL Server: $pgServerName"
+
+Write-Info "Enabling pgvector extension parameter on PostgreSQL server..."
+try {
+    # Enable VECTOR and PGCRYPTO extensions in azure.extensions parameter
+    az postgres flexible-server parameter set `
+        --resource-group $ResourceGroupName `
+        --server-name $pgServerName `
+        --name azure.extensions `
+        --value "VECTOR,PGCRYPTO" `
+        --output none 2>$null
+
+    Write-Success "Azure PostgreSQL extension parameter updated (VECTOR, PGCRYPTO enabled)"
+} catch {
+    Write-Warning "Failed to update extension parameter: $_"
+}
+
+Write-Info "Retrieving PostgreSQL connection details..."
+$pgPassword = az keyvault secret show --vault-name $keyVaultName --name postgres-admin-password --query value -o tsv 2>$null
+
+if ([string]::IsNullOrWhiteSpace($pgPassword)) {
+    Write-Warning "Could not retrieve PostgreSQL password from Key Vault"
+    Write-Info "You may need to create PGVector extension manually"
+} else {
+    Write-Info "Creating pgvector extension in $postgresDatabaseName database..."    # Create temporary pod manifest
+    $podManifest = @"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pgvector-setup
+  namespace: ollama
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    workload: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  containers:
+    - name: psql
+      image: postgres:16
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+      command:
+        - sh
+        - -c
+        - |
+          export PGPASSWORD='$pgPassword'
+          echo "Connecting to PostgreSQL..."
+          psql -h $pgHost -U $postgresAdminUsername -d $postgresDatabaseName -c "CREATE EXTENSION IF NOT EXISTS vector;" || exit 1
+          echo "pgvector extension created successfully!"
+"@
+
+    $tempPodFile = Join-Path $env:TEMP "pgvector-setup-pod.yaml"
+    Set-Content -Path $tempPodFile -Value $podManifest
+
+    try {
+        # Delete pod if it exists from previous run
+        kubectl delete pod pgvector-setup -n ollama --ignore-not-found=true 2>$null | Out-Null
+        Start-Sleep -Seconds 2
+
+        # Create the pod
+        Write-Info "Running pgvector setup pod..."
+        kubectl apply -f $tempPodFile | Out-Null
+
+        # Wait for pod to complete (max 60 seconds)
+        Write-Info "Waiting for extension creation..."
+        $maxWait = 60
+        $elapsed = 0
+        $podCompleted = $false
+
+        while ($elapsed -lt $maxWait -and -not $podCompleted) {
+            Start-Sleep -Seconds 3
+            $elapsed += 3
+
+            $podStatus = kubectl get pod pgvector-setup -n ollama -o jsonpath='{.status.phase}' 2>$null
+            if ($podStatus -eq "Succeeded") {
+                $podCompleted = $true
+                $logs = kubectl logs pgvector-setup -n ollama 2>$null
+                Write-Info "Pod output: $logs"
+                Write-Success "pgvector extension created successfully in openwebui database"
+            } elseif ($podStatus -eq "Failed") {
+                $logs = kubectl logs pgvector-setup -n ollama 2>$null
+                Write-Warning "Pod failed. Logs: $logs"
+                break
+            }
+        }
+
+        if (-not $podCompleted) {
+            Write-Warning "pgvector setup pod did not complete in time"
+            Write-Info "Check pod status with: kubectl logs pgvector-setup -n ollama"
+        }
+
+        # Cleanup
+        kubectl delete pod pgvector-setup -n ollama --ignore-not-found=true 2>$null | Out-Null
+        Remove-Item $tempPodFile -ErrorAction SilentlyContinue
+
+    } catch {
+        Write-Warning "Failed to create pgvector extension via Kubernetes job: $_"
+        Write-Info "Extension parameter is enabled, but you may need to create it manually"
+        Write-Info "Run: CREATE EXTENSION IF NOT EXISTS vector; in the openwebui database"
+    }
+}
+
+# Step 8: Deploy Monitoring Stack (Prometheus + Grafana)
+# ================================================================================
+Write-StepHeader "Deploying Monitoring Stack (Prometheus + Grafana)"
+
+Write-Info "Checking if monitoring namespace exists..."
+# Check if namespace exists without showing error
+$existingNs = kubectl get namespaces -o json 2>$null | ConvertFrom-Json
+$monitoringExists = $existingNs.items | Where-Object { $_.metadata.name -eq "monitoring" }
+
+if ($monitoringExists) {
+    Write-Success "Namespace 'monitoring' already exists"
+} else {
+    Write-Info "Creating monitoring namespace..."
+    kubectl create namespace monitoring 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Namespace 'monitoring' created"
+    } else {
+        Write-Error "Failed to create monitoring namespace"
+        exit 1
+    }
+}
+
+# Check if Helm repo is added
+Write-Info "Adding Prometheus Helm repository..."
+$helmRepoAdd = helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>&1
+if ($LASTEXITCODE -ne 0 -and $helmRepoAdd -notlike "*already exists*") {
+    Write-Warning "Helm repo add had issues, but continuing..."
+}
+$helmRepoUpdate = helm repo update 2>&1 | Out-Null
+Write-Success "Helm repository updated"
+
+# Create monitoring values file with tolerations
+$monitoringValuesFile = Join-Path $env:TEMP "monitoring-values.yaml"
+$monitoringValues = @"
+# Prometheus + Grafana Stack Values with Tolerations
+defaultTolerations: &commonTolerations
+  - key: CriticalAddonsOnly
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+prometheusOperator:
+  tolerations: *commonTolerations
+  admissionWebhooks:
+    patch:
+      tolerations: *commonTolerations
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    retention: 7d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+    tolerations: *commonTolerations
+
+grafana:
+  adminPassword: admin123!
+  service:
+    type: LoadBalancer
+  tolerations: *commonTolerations
+
+alertmanager:
+  alertmanagerSpec:
+    tolerations: *commonTolerations
+
+kube-state-metrics:
+  tolerations: *commonTolerations
+
+prometheus-node-exporter:
+  tolerations:
+    - operator: Exists
+"@
+
+Set-Content -Path $monitoringValuesFile -Value $monitoringValues
+
+Write-Info "Installing kube-prometheus-stack (this may take 2-3 minutes)..."
+$helmInstall = helm install monitoring prometheus-community/kube-prometheus-stack `
+    --namespace monitoring `
+    -f $monitoringValuesFile `
+    --wait `
+    --timeout 5m 2>&1
+
+if ($LASTEXITCODE -eq 0) {
+    Write-Success "Monitoring stack deployed successfully"
+} else {
+    Write-Warning "Monitoring stack deployment encountered issues"
+    Write-Info "You can check status with: kubectl get pods -n monitoring"
+}
+
+# Wait for Grafana to be ready
+Write-Info "Waiting for Grafana pod to be ready..."
+$maxWait = 120
+$elapsed = 0
+$grafanaReady = $false
+
+while ($elapsed -lt $maxWait -and -not $grafanaReady) {
+    $grafanaPod = kubectl get pods -n monitoring -l "app.kubernetes.io/name=grafana" -o jsonpath='{.items[0].status.phase}' 2>$null
+    if ($grafanaPod -eq "Running") {
+        Start-Sleep -Seconds 5  # Give it a few more seconds to fully start
+        $grafanaReady = $true
+        Write-Success "Grafana is ready"
+    } else {
+        Start-Sleep -Seconds 5
+        $elapsed += 5
+    }
+}
+
+# Create ServiceMonitors for GPU and application metrics
+Write-Info "Creating ServiceMonitors for metrics collection..."
+
+# DCGM Exporter ServiceMonitor
+$dcgmServiceMonitor = @"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dcgm-exporter
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: dcgm-exporter
+    app.kubernetes.io/component: gpu-metrics
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: 9400
+      targetPort: 9400
+      protocol: TCP
+  selector:
+    app: dcgm-exporter
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dcgm-exporter
+  namespace: monitoring
+  labels:
+    app: dcgm-exporter
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dcgm-exporter
+  namespaceSelector:
+    matchNames:
+      - ollama
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+"@
+
+$dcgmFile = Join-Path $env:TEMP "dcgm-servicemonitor.yaml"
+Set-Content -Path $dcgmFile -Value $dcgmServiceMonitor
+kubectl apply -f $dcgmFile | Out-Null
+Write-Success "DCGM ServiceMonitor created"
+
+# Get Grafana LoadBalancer IP
+Write-Info "Retrieving Grafana LoadBalancer IP..."
+$maxWait = 60
+$elapsed = 0
+$grafanaIp = ""
+
+while ($elapsed -lt $maxWait) {
+    $grafanaSvc = kubectl get svc -n monitoring monitoring-grafana -o json 2>$null | ConvertFrom-Json
+    if ($grafanaSvc -and $grafanaSvc.status.loadBalancer.ingress) {
+        $grafanaIp = $grafanaSvc.status.loadBalancer.ingress[0].ip
+        if ($grafanaIp) {
+            Write-Success "Grafana LoadBalancer IP: $grafanaIp"
+            break
+        }
+    }
+    Start-Sleep -Seconds 5
+    $elapsed += 5
+}
+
+# Import custom dashboards
+if ($grafanaIp -and $grafanaReady) {
+    Write-Info "Importing custom dashboards to Grafana..."
+    Start-Sleep -Seconds 10  # Give Grafana a bit more time
+
+    $dashboardDir = Join-Path $PSScriptRoot "..\dashboards"
+    $dashboardFiles = Get-ChildItem -Path $dashboardDir -Filter "*.json" -ErrorAction SilentlyContinue
+
+    if ($dashboardFiles) {
+        $grafanaUrl = "http://$grafanaIp"
+        $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:admin123!"))
+        $headers = @{
+            "Authorization" = "Basic $auth"
+            "Content-Type" = "application/json"
+        }
+
+        foreach ($file in $dashboardFiles) {
+            try {
+                Write-Info "Importing: $($file.Name)"
+                $dashboardJson = Get-Content -Path $file.FullName -Raw | ConvertFrom-Json
+                $payload = @{ dashboard = $dashboardJson; overwrite = $true } | ConvertTo-Json -Depth 100
+
+                $result = Invoke-RestMethod -Method Post -Uri "$grafanaUrl/api/dashboards/db" -Headers $headers -Body $payload -ErrorAction Stop
+                Write-Success "  Dashboard imported: $($result.slug)"
+            } catch {
+                Write-Warning "  Failed to import $($file.Name): $_"
+            }
+        }
+        Write-Success "Dashboard import complete"
+    } else {
+        Write-Info "No custom dashboards found in $dashboardDir"
+    }
+}
+
+# Cleanup temp files
+Remove-Item $monitoringValuesFile -ErrorAction SilentlyContinue
+Remove-Item $dcgmFile -ErrorAction SilentlyContinue
 
 Write-StepHeader "Deployment Complete!"
 
@@ -668,6 +1030,12 @@ if (-not [string]::IsNullOrWhiteSpace($externalIp) -and $externalIp -ne "pending
     Write-Host "Ollama API        : " -NoNewline -ForegroundColor White
     Write-Host "http://$ollamaClusterIp:11434 (internal)" -ForegroundColor Cyan
 
+    if ($grafanaIp) {
+        Write-Host "Grafana Dashboard : " -NoNewline -ForegroundColor White
+        Write-Host "http://$grafanaIp" -ForegroundColor Green
+        Write-Host "  Username: admin | Password: admin123!" -ForegroundColor Gray
+    }
+
     Write-Host "`nAccess Details:" -ForegroundColor Yellow
     Write-Host "  1. Navigate to: " -NoNewline -ForegroundColor White
     Write-Host "http://$externalIp" -ForegroundColor Green
@@ -684,12 +1052,23 @@ if (-not [string]::IsNullOrWhiteSpace($externalIp) -and $externalIp -ne "pending
     Write-Host "  Public Web UI  : http://$externalIp" -ForegroundColor White
     Write-Host "  Ollama API     : http://$ollamaClusterIp:11434 (cluster-internal)" -ForegroundColor White
     Write-Host "  From Pod       : http://ollama.ollama.svc.cluster.local:11434" -ForegroundColor White
+    if ($grafanaIp) {
+        Write-Host "  Grafana        : http://$grafanaIp (admin/admin123!)" -ForegroundColor White
+    }
 
     Write-Host "`nStorage Configuration:" -ForegroundColor Yellow
-    Write-Host "  Ollama Models : Azure Files Premium (100GB, RWX)" -ForegroundColor White
+    Write-Host "  Ollama Models : Azure Files Premium (1TB, RWX)" -ForegroundColor White
     Write-Host "  Open-WebUI DB : Azure PostgreSQL Flexible Server (B1ms)" -ForegroundColor White
     Write-Host "  Database      : PostgreSQL (highly available, managed)" -ForegroundColor White
     Write-Host "  Password      : Stored in Key Vault (secret: postgres-admin-password)" -ForegroundColor White
+
+    if ($grafanaIp) {
+        Write-Host "`nMonitoring Stack:" -ForegroundColor Yellow
+        Write-Host "  Prometheus    : Deployed (7-day retention, 20GB storage)" -ForegroundColor White
+        Write-Host "  Grafana       : http://$grafanaIp" -ForegroundColor White
+        Write-Host "  GPU Metrics   : DCGM Exporter + ServiceMonitors configured" -ForegroundColor White
+        Write-Host "  Dashboards    : Pre-loaded (GPU Monitoring, Platform Overview)" -ForegroundColor White
+    }
 } else {
     Write-Host "Open-WebUI URL    : [PENDING] Run 'kubectl get svc -n ollama' to get IP" -ForegroundColor Yellow
     Write-Host "Ollama API        : http://$ollamaClusterIp:11434 (internal)" -ForegroundColor Cyan

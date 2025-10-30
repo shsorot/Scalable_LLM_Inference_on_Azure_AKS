@@ -25,13 +25,12 @@ param(
 
     [Parameter(Mandatory = $false)]
     [string[]]$Models = @(
-        "phi3.5"            # 2.3GB - Fast, efficient model
-        # Commented out for fast deployment - uncomment to preload more models:
-        # "llama3.1:8b",      # 4.7GB - Production-ready
-        # "mistral:7b",       # 4.1GB - Popular alternative
-        # "gemma2:2b",        # 1.6GB - Lightweight model
-        # "gpt-oss",          # ~13GB - GPT-like open source model
-        # "deepseek-r1"       # ~8GB - DeepSeek reasoning model
+        "phi3.5",           # 2.3GB - Fast, efficient model
+        "llama3.1:8b",      # 4.7GB - Production-ready
+        "mistral:7b",       # 4.1GB - Popular alternative
+        "gemma2:2b",        # 1.6GB - Lightweight model
+        "gpt-oss",          # ~13GB - GPT-like open source model
+        "deepseek-r1"       # ~8GB - DeepSeek reasoning model
     ),
 
     [Parameter(Mandatory = $false)]

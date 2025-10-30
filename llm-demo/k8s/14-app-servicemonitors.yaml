@@ -1,0 +1,40 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ollama-metrics
+  namespace: monitoring
+  labels:
+    app: ollama
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: ollama
+  namespaceSelector:
+    matchNames:
+      - ollama
+  endpoints:
+    - port: http
+      interval: 30s
+      path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: open-webui-metrics
+  namespace: monitoring
+  labels:
+    app: open-webui
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: open-webui
+  namespaceSelector:
+    matchNames:
+      - ollama
+  endpoints:
+    - port: http
+      interval: 30s
+      path: /metrics

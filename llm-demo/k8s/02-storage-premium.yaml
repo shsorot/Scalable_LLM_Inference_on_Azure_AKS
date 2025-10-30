@@ -37,4 +37,4 @@ spec:
   storageClassName: azurefile-premium-llm
   resources:
     requests:
-      storage: 100Gi  # Space for multiple LLM models
+      storage: 1024Gi  # Space for multiple LLM models (1TB)

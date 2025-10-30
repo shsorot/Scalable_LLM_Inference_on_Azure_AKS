@@ -75,26 +75,30 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' = {
         }
       }
       {
-        // GPU node pool for LLM inference
+        // GPU node pool for LLM inference with autoscaling
         name: 'gpu'
         count: gpuNodeCount
+        minCount: 1              // Minimum nodes for cost efficiency
+        maxCount: 5              // Maximum nodes for scaling (adjust based on quota)
         vmSize: gpuVmSize
-        osDiskSizeGB: 256 // Large disk for model caching
+        osDiskSizeGB: 256        // Large disk for model caching
         osDiskType: 'Managed'
         osType: 'Linux'
         mode: 'User'
         type: 'VirtualMachineScaleSets'
-        enableAutoScaling: false
+        enableAutoScaling: true  // Enable cluster autoscaler
         maxPods: 30
         availabilityZones: []
         nodeTaints: [
-          'sku=gpu:NoSchedule' // Prevent non-GPU workloads
+          'sku=gpu:NoSchedule'   // Prevent non-GPU workloads
         ]
         nodeLabels: {
           'workload': 'llm'
           'gpu': 'true'
           'gpu-type': 'nvidia-t4'
         }
+        // Scale-down settings
+        scaleDownMode: 'Delete'  // Delete nodes when scaling down (vs Deallocate)
       }
     ]
 
