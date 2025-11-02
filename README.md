@@ -28,8 +28,9 @@ This architecture demonstrates:
 - ✅ **Open-WebUI** chat interface (3 replicas) with document upload and RAG
 - ✅ **PostgreSQL Flexible Server** with PGVector extension for embeddings
 - ✅ **Prometheus + Grafana** monitoring stack with GPU metrics and custom dashboards
+- ✅ **Prometheus Adapter** for GPU-based autoscaling (custom metrics API)
 - ✅ **Azure Key Vault** integration for secure credential management
-- ✅ **Auto-scaling** configuration (CPU/Memory based HPA ready to enable)
+- ✅ **GPU-Based Autoscaling** - HPA with GPU memory utilization metrics
 
 ### Key Technologies
 | Component | Purpose | Why This Choice |
@@ -44,10 +45,12 @@ This architecture demonstrates:
 ## ✨ Key Features
 
 - ✅ **GPU-Accelerated Inference** - NVIDIA T4 GPUs deliver 10-20x faster inference compared to CPU-only deployments
+- ✅ **GPU-Based Autoscaling** - HPA scales Ollama pods based on GPU memory utilization (via Prometheus Adapter + DCGM)
 - ✅ **Vector Database Integration** - PostgreSQL with PGVector enables semantic search with <50ms query latency for RAG applications
 - ✅ **Smart Storage Strategy** - Azure Files Premium with RWX access enables horizontal scaling while maintaining sub-10ms model load latency
 - ✅ **Horizontal Scaling** - Load balanced across 3 Open-WebUI replicas, scales to N replicas without model duplication
 - ✅ **Multi-Model Support** - Pre-load 6 different LLM models (~35GB total) with instant access from any pod
+- ✅ **Multi-User Ready** - Model access control bypassed, all users can access all models
 - ✅ **Production Ready** - 99.9% SLA, automatic backups, integrated monitoring, and enterprise security with Azure Key Vault
 - ✅ **Cost Optimized** - Spot GPU instances + burstable PostgreSQL = ~$15-25/day (70-90% savings vs. standard pricing)
 
@@ -303,16 +306,18 @@ llm-demo/
 
 This demo uses **Azure Files Premium** for model storage. This section explains the tradeoffs to help you make informed decisions for your specific workload.
 
-###Storage Options Comparison
+### Storage Options Comparison
 
-| Storage Type | Access Mode | Latency | Durability | Cost/1TB/mo | Best For |
-|--------------|-------------|---------|------------|---------------|----------|
-| **Azure Files Premium** | RWX (many pods) | 1-10ms | 99.9% SLA | ~$200 | Multi-replica LLM workloads |
-| **Azure Blob NFS** | RWX (many pods) | 10-50ms | 99.999999999% | ~$20 | Large-scale, cost-sensitive |
-| **Local NVMe (Lsv3)** | RWO (one pod) | <1ms | Ephemeral | ~$3000-5000/VM* | Ultra-low latency needs |
-| **Azure Disk Premium** | RWO (one pod) | <5ms | 99.9% SLA | ~$140 | Single-replica apps |
+| Storage Type | Access Mode | Latency | Durability | Cost (100GB) | Monthly Cost | Best For |
+|--------------|-------------|---------|------------|--------------|--------------|----------|
+| **Azure Files Premium** | RWX (many pods) | 1-10ms | 99.9% SLA | $0.20/GB | ~$20/month | Multi-replica shared model storage |
+| **Azure Blob NFS** | RWX (many pods) | 10-50ms | 99.999999999% | $0.02/GB | ~$2/month | Large-scale, cost-sensitive, read-heavy |
+| **Azure Disk Premium** | RWO (one pod) | <5ms | 99.9% SLA | $0.14/GB | ~$14/month | Single-replica, persistent workloads |
+| **ACSTor Ephemeral** | RWO* (one pod) | <5ms | Ephemeral | ~$0.50/GB | ~$50/month | Pod-local, high-IOPS, emerging |
+| **Local NVMe (GPU VMs)** | RWO (one pod) | <1ms | Ephemeral | Included in VM | See VM cost** | Single-node, ultra-low latency, random I/O |
 
-_*Local NVMe cost shown as VM premium over standard GPU VMs_
+_*ACSTor RWX support is experimental and limited_
+_**NVMe comes with specific GPU VM SKUs: NV36ads_A10_v5 (~$1,565/mo) or NC24ads_A100_v4 (~$2,100/mo) per VM_
 
 ### Why Azure Files Premium for This Workload
 
@@ -391,19 +396,34 @@ With Local NVMe:
 - Local NVMe: 175GB total (35GB × 5 nodes)
 - **5x storage waste with NVMe**
 
-#### 5. **Cost Analysis (Monthly)**
+#### 5. **Cost Analysis - Realistic Comparison for 2 GPU Nodes**
 
-**Azure Files Premium (1TB)**:
-- Storage: $200/month (1TB × $0.20/GB)
-- Transactions: ~$5/month (startup operations)
-- **Total: ~$205/month**
+**Option A: Current Architecture (Azure Files Premium + T4 Spot)**
+- GPU Nodes: 2x NC4as_T4_v3 Spot @ $0.158/hr = ~$228/month
+- Storage: 100GB Azure Files Premium = ~$20/month
+- **Total: ~$248/month**
 
-**Local NVMe (3x NC4as_T4_v3 Lsv3)**:
-- VM premium over standard: ~$300/month/VM
-- 3 VMs: $900/month additional
-- **Total: ~$900/month** (for NVMe capability)
+**Option B: NVMe GPU VMs with A10 GPUs**
+- GPU Nodes: 2x NV36ads_A10_v5 Standard @ $2.16/hr = ~$3,110/month
+  - Includes: 1x A10 GPU (24GB) + 1.8TB NVMe per VM
+- Storage: Included in VM price
+- **Total: ~$3,110/month**
+- **Cost increase: +$2,862/month (+1,154%)**
 
-**Savings: $875/month (97% reduction)**
+**Option C: NVMe GPU VMs with A100 GPUs**
+- GPU Nodes: 2x NC24ads_A100_v4 Standard @ $2.90/hr = ~$4,176/month
+  - Includes: 1x A100 GPU (40GB) + 3.8TB NVMe per VM
+- Storage: Included in VM price
+- **Total: ~$4,176/month**
+- **Cost increase: +$3,928/month (+1,584%)**
+
+**Option D: ACSTor Ephemeral Disk + T4 Spot**
+- GPU Nodes: 2x NC4as_T4_v3 Spot @ $0.158/hr = ~$228/month
+- Storage: ACSTor Ephemeral Disk Pool 100GB = ~$50-100/month
+- **Total: ~$278-328/month**
+- **Cost increase: +$30-80/month (+12-32%)**
+
+**Key Consideration:** NVMe options include more powerful GPUs (A10/A100) but cost 10-16× more. For T4-class inference workloads, Azure Files Premium provides the most cost-effective shared storage.
 
 #### 6. **Operational Simplicity**
 
@@ -421,25 +441,66 @@ With Local NVMe:
 - ❌ Requires custom sync scripts
 - ❌ State lost on cluster recreation
 
-### When to Consider Local NVMe
+### When to Use Each Storage Option
 
-Local NVMe makes sense for:
-1. **Single-node deployments** - No need for RWX sharing
-2. **Ultra-low latency requirements** - <1ms random I/O needed
-3. **Small models (<1GB)** - Load time difference negligible
-4. **Stateless workloads** - No persistence required
+#### Choose Azure Files Premium When:
+✅ **Multi-replica LLM deployments** (this demo's use case)
+- Multiple pods need simultaneous access to same model files
+- Horizontal scaling without storage duplication
+- Pod mobility across nodes for high availability
+- Spot VMs where storage must persist during deallocation
 
-**This is NOT our workload!** LLM inference requires:
-- Large models (2-40GB+)
-- Multi-replica scaling
-- High availability
-- Sequential I/O patterns (not latency-critical)
+✅ **Cost optimization is critical**
+- T4-class GPU workloads where storage cost matters
+- Sequential read patterns (model loading) where latency difference is negligible
+- Dev/test environments with frequent cluster recreation
+
+✅ **Operational simplicity preferred**
+- Managed service with automatic replication
+- No manual synchronization between nodes
+- Snapshot support for model versioning
+
+#### Choose NVMe GPU VMs When:
+✅ **Single-replica per node with node affinity**
+- Workload guarantees one pod per GPU node
+- No need for pod mobility or cross-node sharing
+- Can tolerate node failures requiring full model redownload
+
+✅ **Ultra-low latency random I/O required**
+- Database workloads with sub-millisecond requirements
+- Random access patterns, not sequential model loading
+- Small file operations (<100MB) performance critical
+
+✅ **Higher GPU compute needed anyway**
+- Already deploying A10/A100 VMs for GPU performance
+- NVMe storage is a bonus, not the primary driver
+- Budget allows 10-16× cost increase
+
+✅ **Stateless or ephemeral workloads**
+- Short-lived training jobs where NVMe is scratch space
+- No persistence required beyond job execution
+- Can re-download/rebuild state quickly
+
+#### Choose ACSTor Ephemeral Disk When:
+⚠️ **Testing emerging technologies**
+- Willing to work with experimental RWX support
+- Single-pod-per-node deployment pattern
+- 30% cost premium acceptable for managed ephemeral storage
+
+**Note:** ACSTor is evolving; monitor for improved RWX capabilities in future releases.
+
+#### Choose Azure Blob NFS When:
+✅ **Large-scale, cost-sensitive read-heavy workloads**
+- Massive model repositories (100s of GBs to TBs)
+- Predominantly read access patterns
+- Can tolerate 10-50ms latency
+- Budget constraints require lowest storage cost (~90% cheaper than Azure Files Premium)
 
 ### Real-World Performance Metrics
 
 From our testing environment:
 
-```
+```text
 Model: llama3.1:8b (4.7GB)
 
 Azure Files Premium:
@@ -453,26 +514,86 @@ Hypothetical Local NVMe:
 └── Inference: 127ms/token average (identical)
 
 Conclusion: 12-second startup difference for hours of operation
+Performance bottleneck: GPU compute, not storage I/O
 ```
 
-### Decision Matrix
+### Ideal Use Cases for This Architecture
 
-Choose **Azure Files Premium** when:
-- ✅ Running multiple replicas
-- ✅ Need pod mobility across nodes
-- ✅ Require storage durability
-- ✅ Want operational simplicity
-- ✅ Cost optimization is important
-- ✅ Sequential I/O workload
+This architecture (Azure Files Premium + T4 Spot + Multi-Replica) is optimized for:
 
-Choose **Local NVMe** when:
-- Single replica per node guaranteed
-- <1ms latency is critical
-- Random I/O intensive workload
-- Short-lived, stateless workloads
-- Budget allows 10x storage cost
+#### ✅ Development & Testing Environments
+- Rapid iteration with frequent cluster recreation
+- Cost-sensitive budgets requiring Spot instances
+- Multiple developers sharing same infrastructure
+- Need for quick scale-up/scale-down
 
-**For LLM inference, Azure Files Premium is the clear winner.**
+#### ✅ Multi-Tenant SaaS Platforms
+- Serving multiple customers from shared model pool
+- Horizontal scaling based on customer demand
+- High availability requirements (pod mobility)
+- Cost optimization through resource sharing
+
+#### ✅ Enterprise Internal AI Assistants
+- Departmental chatbots with varying load patterns
+- Multiple models for different use cases (HR, IT, Finance)
+- Auto-scaling based on business hours
+- Managed service preference (minimal ops overhead)
+
+#### ✅ RAG-Based Document Q&A Systems
+- Large document corpus requiring vector search
+- Multiple UI replicas handling concurrent users
+- Persistent storage for uploaded documents
+- Integration with existing PostgreSQL workflows
+
+#### ✅ Model Experimentation & A/B Testing
+- Frequently swapping between different model versions
+- Testing multiple models simultaneously
+- Need to preserve model artifacts between tests
+- Snapshot support for model versioning
+
+#### ✅ Educational & Demo Environments
+- Workshop/training scenarios with ephemeral clusters
+- Budget constraints (Spot + Premium Files = $250-400/month)
+- Need to demonstrate Kubernetes patterns
+- Quick teardown and rebuild capability
+
+#### ❌ NOT Ideal For:
+
+**High-Frequency Trading or Real-Time Systems**
+- Where every millisecond of startup latency matters
+- Consider NVMe GPU VMs despite higher cost
+
+**Single-Model, Single-Replica Production Systems**
+- No benefit from RWX storage sharing
+- Azure Disk Premium may be more cost-effective
+
+**GPU-Intensive Training Workloads**
+- Requires A100/H100-class GPUs with NVMe anyway
+- Storage I/O is secondary to GPU interconnect speed
+
+**Extremely Large Models (>100GB)**
+- Consider Azure Blob NFS for cost (~90% cheaper)
+- Or model sharding across multiple GPUs
+
+### Storage Decision Summary
+
+For **this specific workload** (multi-replica LLM inference with shared models):
+
+**Azure Files Premium** is the optimal choice because:
+- ✅ Native RWX support enables horizontal scaling without duplication
+- ✅ 10-16× more cost-effective than NVMe GPU VMs for T4-class workloads
+- ✅ Pod mobility and high availability built-in
+- ✅ Spot VM compatible (storage persists during deallocation)
+- ✅ Managed service reduces operational overhead
+- ✅ Sequential read pattern makes storage latency non-critical
+
+**However, storage strategy must match your workload:**
+- Single-replica + ultra-low latency → NVMe GPU VMs
+- Cost-sensitive + massive scale → Azure Blob NFS
+- Multi-replica + shared models → **Azure Files Premium** (this demo)
+- Single-replica + persistent → Azure Disk Premium
+
+**There is no universal "best" storage—only the right fit for your requirements.**
 
 ## �📖 Deployment Guide
 
@@ -562,6 +683,26 @@ kubectl describe nodes -l agentpool=gpu
 ```
 
 ## 🐛 Troubleshooting
+
+### Azure Policy Warnings During Deployment
+
+**Symptom**: Warnings about container images during Helm installation:
+```
+Warning: [azurepolicy-*] Container image quay.io/prometheus/node-exporter:v1.10.2
+for container node-exporter has not been allowed.
+```
+
+**Cause**: Azure Policy in audit/warn mode restricts container registries to `*.azurecr.io` and `mcr.microsoft.com`
+
+**Impact**:
+- ✅ If enforcement mode is `warn`: Deployment succeeds, warnings are informational only
+- ❌ If enforcement mode is `deny`: Pods fail to start
+
+**Solution**: See [Azure Policy Compliance Guide](docs/AZURE-POLICY-COMPLIANCE.md) for detailed options:
+1. **Informational handling** (already implemented in deployment scripts)
+2. **Create policy exemptions** using `scripts/create-policy-exemption.ps1`
+3. **Mirror images to ACR** for full compliance
+4. **Request policy modification** from your governance team
 
 ### Open-WebUI Pods CrashLoopBackOff
 

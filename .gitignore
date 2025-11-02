@@ -3,6 +3,9 @@ temp/
 *.log
 *.tmp
 
+# Benchmark results
+benchmarks/results-*/
+
 # Booth demo generated files (created at deployment time)
 booth-card.html
 booth-qr-*.png
@@ -20,6 +23,9 @@ PowerShell_transcript*.txt
 # Bicep compiled files
 *.json.bak
 parameters.json
+bicep/main.json
+bicep/aks.json
+bicep/postgres.json
 
 # Kubernetes local config
 kubeconfig
@@ -44,6 +50,7 @@ desktop.ini
 __pycache__/
 *.pyc
 *.pyo
+.mypy_cache/
 
 # Node modules (if using JS tools)
 node_modules/

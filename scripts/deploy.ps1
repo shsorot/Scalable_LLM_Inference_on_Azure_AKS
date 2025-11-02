@@ -1,26 +1,22 @@
 <#
 .SYNOPSIS
-    Deploy KubeCon NA 2025 LLM Demo - Azure Files + AKS + Ollama + Open-WebUI
+    Deploy Scalable LLM Inference Platform on Azure AKS with GPU autoscaling
 
 .DESCRIPTION
-    Orchestrates full infrastructure deployment including:
-    - Azure infrastructure (AKS, Azure Files, Key Vault)
-    - AKS cluster with GPU node pool (T4/A10)
-    - Ollama LLM server
-    - Open-WebUI frontend
-    - Pre-load Llama-3.1-8B model
+    Deploys complete infrastructure: AKS with GPU nodes, Ollama, Open-WebUI,
+    Prometheus/Grafana monitoring, and GPU-based autoscaling.
 
 .PARAMETER Prefix
-    Unique prefix for resource naming (3-15 alphanumeric chars)
+    Unique prefix for resource naming (3-8 lowercase alphanumeric chars)
 
 .PARAMETER Location
-    Azure region
+    Azure region (northeurope, westus2, or eastus)
 
 .PARAMETER HuggingFaceToken
-    HF token for pre-loading Llama-3.1-8B model
+    HuggingFace token for model downloads
 
 .EXAMPLE
-    .\scripts\deploy.ps1 -Prefix "kubecon" -Location "westus2" -HuggingFaceToken "hf_demo_token_placeholder"
+    .\scripts\deploy.ps1 -Prefix "demo" -Location "westus2" -HuggingFaceToken "hf_xxx"
 #>
 
 [CmdletBinding()]
@@ -63,11 +59,11 @@ $PreloadScript = "scripts\preload-model.ps1"
 
 # Validate files exist
 if (-not (Test-Path $BicepMainFile)) {
-    Write-Error "Bicep file not found at: $(Resolve-Path $BicepMainFile -ErrorAction SilentlyContinue). Current directory: $(Get-Location)"
+    Write-ErrorMsg "Bicep file not found at: $(Resolve-Path $BicepMainFile -ErrorAction SilentlyContinue). Current directory: $(Get-Location)"
     exit 1
 }
 if (-not (Test-Path $K8sManifestsDir)) {
-    Write-Error "K8s directory not found at: $(Resolve-Path $K8sManifestsDir -ErrorAction SilentlyContinue). Current directory: $(Get-Location)"
+    Write-ErrorMsg "K8s directory not found at: $(Resolve-Path $K8sManifestsDir -ErrorAction SilentlyContinue). Current directory: $(Get-Location)"
     exit 1
 }
 
@@ -88,7 +84,7 @@ function Write-Info {
     Write-Host "[INFO] $Message" -ForegroundColor Yellow
 }
 
-function Write-Error {
+function Write-ErrorMsg {
     param([string]$Message)
     Write-Host "[ERROR] $Message" -ForegroundColor Red
 }
@@ -114,7 +110,7 @@ try {
     $azVersion = (az version | ConvertFrom-Json).'azure-cli'
     Write-Success "Azure CLI installed: $azVersion"
 } catch {
-    Write-Error "Azure CLI not found. Please install from https://aka.ms/installazurecli"
+    Write-ErrorMsg "Azure CLI not found. Please install from https://aka.ms/installazurecli"
     exit 1
 }
 
@@ -122,18 +118,18 @@ try {
     $kubectlVersion = kubectl version --client -o json | ConvertFrom-Json
     Write-Success "kubectl installed: $($kubectlVersion.clientVersion.gitVersion)"
 } catch {
-    Write-Error "kubectl not found. Please install from https://kubernetes.io/docs/tasks/tools/"
+    Write-ErrorMsg "kubectl not found. Please install from https://kubernetes.io/docs/tasks/tools/"
     exit 1
 }
 
 if (-not (Test-Path $BicepMainFile)) {
-    Write-Error "Bicep file not found: $BicepMainFile"
+    Write-ErrorMsg "Bicep file not found: $BicepMainFile"
     exit 1
 }
 Write-Success "Bicep files found"
 
 if (-not (Test-Path $K8sManifestsDir)) {
-    Write-Error "K8s manifests directory not found: $K8sManifestsDir"
+    Write-ErrorMsg "K8s manifests directory not found: $K8sManifestsDir"
     exit 1
 }
 Write-Success "K8s manifests directory found"
@@ -142,7 +138,7 @@ try {
     $account = az account show | ConvertFrom-Json
     Write-Success "Logged into Azure: $($account.user.name) (Subscription: $($account.name))"
 } catch {
-    Write-Error "Not logged into Azure. Run 'az login'"
+    Write-ErrorMsg "Not logged into Azure. Run 'az login'"
     exit 1
 }
 
@@ -155,7 +151,7 @@ if ($rgExists -eq "true") {
     Write-Host "`n[WARNING] Resource group '$ResourceGroupName' already exists in location: $($existingRg.location)" -ForegroundColor Yellow
 
     if ($existingRg.location -ne $Location) {
-        Write-Error "Resource group exists in different location ($($existingRg.location)). Please use a different prefix or run cleanup first."
+        Write-ErrorMsg "Resource group exists in different location ($($existingRg.location)). Please use a different prefix or run cleanup first."
         Write-Host "To cleanup: .\scripts\cleanup.ps1 -Prefix $Prefix" -ForegroundColor Cyan
         exit 1
     }
@@ -174,7 +170,7 @@ if ($rgExists -eq "true") {
     Write-Info "Creating resource group: $ResourceGroupName in $Location"
     az group create --name $ResourceGroupName --location $Location
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to create resource group"
+        Write-ErrorMsg "Failed to create resource group"
         exit 1
     }
     Write-Success "Resource group created"
@@ -200,7 +196,7 @@ az deployment group create `
     --output table
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Bicep deployment failed. Check the output above for details."
+    Write-ErrorMsg "Bicep deployment failed. Check the output above for details."
     exit 1
 }
 
@@ -217,7 +213,7 @@ $deploymentOutput = az deployment group show `
 try {
     $deployment = $deploymentOutput | ConvertFrom-Json
 } catch {
-    Write-Error "Failed to parse deployment output"
+    Write-ErrorMsg "Failed to parse deployment output"
     exit 1
 }
 
@@ -311,7 +307,7 @@ while ($elapsedSeconds -lt $maxWaitSeconds) {
 }
 
 if (-not $clusterReady) {
-    Write-Error "AKS cluster did not reach ready state within $maxWaitSeconds seconds"
+    Write-ErrorMsg "AKS cluster did not reach ready state within $maxWaitSeconds seconds"
     exit 1
 }
 
@@ -369,7 +365,7 @@ az aks get-credentials `
     --admin | Out-Null
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to get AKS credentials"
+    Write-ErrorMsg "Failed to get AKS credentials"
     exit 1
 }
 Write-Success "kubectl configured"
@@ -454,7 +450,7 @@ while ($elapsedSeconds -lt $maxWaitSeconds) {
 }
 
 if (-not $gpuReady) {
-    Write-Error "GPU drivers did not initialize within 5 minutes. Check NVIDIA device plugin logs."
+    Write-ErrorMsg "GPU drivers did not initialize within 5 minutes. Check NVIDIA device plugin logs."
     Write-Info "Debug command: kubectl logs -n kube-system -l name=nvidia-device-plugin-ds"
     exit 1
 }
@@ -556,24 +552,19 @@ while ($elapsedSeconds -lt $maxWaitSeconds) {
 }
 
 if ($elapsedSeconds -ge $maxWaitSeconds) {
-    Write-Error "PVCs did not bind within timeout"
+    Write-ErrorMsg "PVCs did not bind within timeout"
     exit 1
 }
 
-Write-Info "Deploying Ollama server (Deployment with autoscaling)..."
-# Deploy either StatefulSet or Deployment based on what exists
-if (Test-Path "$K8sManifestsDir/05-ollama-deployment.yaml") {
-    kubectl apply -f "$K8sManifestsDir/05-ollama-deployment.yaml"
-} elseif (Test-Path "$K8sManifestsDir/05-ollama-statefulset.yaml") {
-    kubectl apply -f "$K8sManifestsDir/05-ollama-statefulset.yaml"
-}
+Write-Info "Deploying Ollama server (StatefulSet with autoscaling)..."
+kubectl apply -f "$K8sManifestsDir/05-ollama-statefulset.yaml"
 kubectl apply -f "$K8sManifestsDir/06-ollama-service.yaml"
 Write-Success "Ollama deployed"
 
 Write-Info "Waiting for Ollama pod to be ready (max 5 minutes)..."
 kubectl wait --for=condition=ready pod -l app=ollama -n ollama --timeout=300s
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Ollama pod did not become ready"
+    Write-ErrorMsg "Ollama pod did not become ready"
     exit 1
 }
 Write-Success "Ollama pod ready"
@@ -624,7 +615,7 @@ if (Test-Path $MultiModelScript) {
     Write-Info "  - deepseek-r1 (8 GB)"
     & $MultiModelScript -Namespace "ollama"
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Multi-model pre-load failed"
+        Write-ErrorMsg "Multi-model pre-load failed"
         exit 1
     }
     Write-Success "Models pre-loaded successfully"
@@ -633,7 +624,7 @@ if (Test-Path $MultiModelScript) {
     if (Test-Path $PreloadScript) {
         & $PreloadScript -ModelName "llama3.1:8b" -Namespace "ollama"
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "Model pre-load failed"
+            Write-ErrorMsg "Model pre-load failed"
             exit 1
         }
         Write-Success "Model pre-loaded successfully"
@@ -780,7 +771,7 @@ if ($monitoringExists) {
     if ($LASTEXITCODE -eq 0) {
         Write-Success "Namespace 'monitoring' created"
     } else {
-        Write-Error "Failed to create monitoring namespace"
+        Write-ErrorMsg "Failed to create monitoring namespace"
         exit 1
     }
 }
@@ -844,17 +835,46 @@ prometheus-node-exporter:
 Set-Content -Path $monitoringValuesFile -Value $monitoringValues
 
 Write-Info "Installing kube-prometheus-stack (this may take 2-3 minutes)..."
-$helmInstall = helm install monitoring prometheus-community/kube-prometheus-stack `
+$ErrorActionPreference = 'Continue'
+$helmOutput = helm install monitoring prometheus-community/kube-prometheus-stack `
     --namespace monitoring `
     -f $monitoringValuesFile `
     --wait `
     --timeout 5m 2>&1
+$helmExitCode = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
 
-if ($LASTEXITCODE -eq 0) {
+# Check for Azure Policy warnings in output (informational only)
+$policyWarnings = $helmOutput | Select-String -Pattern "azurepolicy.*has not been allowed"
+if ($policyWarnings) {
+    Write-Info "Note: Azure Policy warnings detected (audit mode, not blocking deployment):"
+    $policyWarnings | ForEach-Object {
+        $line = $_.Line
+        # Extract image name from warning
+        if ($line -match "Container image ([^\s]+)") {
+            Write-Info "  - Image: $($matches[1])"
+        }
+    }
+    Write-Info "These warnings are from Azure Policy in audit/warn mode and do not affect deployment."
+}
+
+# Verify actual deployment by checking Helm release status
+$helmStatus = helm list -n monitoring -o json 2>$null | ConvertFrom-Json
+$deploymentSuccess = $helmStatus | Where-Object { $_.name -eq "monitoring" -and $_.status -eq "deployed" }
+
+if ($deploymentSuccess) {
     Write-Success "Monitoring stack deployed successfully"
+    if ($policyWarnings) {
+        Write-Info "To resolve policy warnings, you can either:"
+        Write-Info "  1. Use mirrored images from Azure Container Registry (ACR)"
+        Write-Info "  2. Request Azure Policy exemption using: .\scripts\create-policy-exemption.ps1"
+    }
 } else {
-    Write-Warning "Monitoring stack deployment encountered issues"
+    Write-ErrorMsg "Monitoring stack deployment failed"
+    Write-Info "Helm output:"
+    $helmOutput | ForEach-Object { Write-Host "  $_" }
     Write-Info "You can check status with: kubectl get pods -n monitoring"
+    exit 1
 }
 
 # Wait for Grafana to be ready
@@ -875,29 +895,127 @@ while ($elapsed -lt $maxWait -and -not $grafanaReady) {
     }
 }
 
+# Install Prometheus Adapter for Custom Metrics API
+Write-StepHeader "Installing Prometheus Adapter"
+Write-Info "Prometheus Adapter enables HPA to use custom GPU metrics..."
+
+$prometheusAdapterValues = @"
+# Prometheus Adapter Configuration
+# Enables custom metrics API for HPA to query GPU metrics from Prometheus
+
+prometheus:
+  url: http://monitoring-kube-prometheus-prometheus.monitoring.svc
+  port: 9090
+
+rules:
+  default: true
+  custom:
+  # DCGM GPU metrics - using exported_namespace and exported_pod labels
+  # These labels point to the actual workload pod using the GPU, not the dcgm-exporter pod
+  - seriesQuery: 'DCGM_FI_DEV_GPU_UTIL{exported_namespace!="",exported_pod!=""}'
+    resources:
+      overrides:
+        exported_namespace: {resource: "namespace"}
+        exported_pod: {resource: "pod"}
+    name:
+      matches: "^(.*)$"
+      as: "gpu_utilization"
+    metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+  - seriesQuery: 'DCGM_FI_DEV_FB_USED{exported_namespace!="",exported_pod!=""}'
+    resources:
+      overrides:
+        exported_namespace: {resource: "namespace"}
+        exported_pod: {resource: "pod"}
+    name:
+      matches: "^(.*)$"
+      as: "gpu_memory_used_bytes"
+    metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+  - seriesQuery: 'DCGM_FI_DEV_FB_FREE{exported_namespace!="",exported_pod!=""}'
+    resources:
+      overrides:
+        exported_namespace: {resource: "namespace"}
+        exported_pod: {resource: "pod"}
+    name:
+      matches: "^(.*)$"
+      as: "gpu_memory_free_bytes"
+    metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+  # Calculate GPU memory utilization percentage
+  - seriesQuery: 'DCGM_FI_DEV_FB_USED{exported_namespace!="",exported_pod!=""}'
+    resources:
+      overrides:
+        exported_namespace: {resource: "namespace"}
+        exported_pod: {resource: "pod"}
+    name:
+      matches: "^(.*)$"
+      as: "gpu_memory_utilization"
+    metricsQuery: 'avg((DCGM_FI_DEV_FB_USED{<<.LabelMatchers>>} / (DCGM_FI_DEV_FB_USED{<<.LabelMatchers>>} + DCGM_FI_DEV_FB_FREE{<<.LabelMatchers>>})) * 100) by (<<.GroupBy>>)'
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# Tolerations to run on system nodes
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
+"@
+
+$adapterValuesFile = Join-Path $env:TEMP "prometheus-adapter-values.yaml"
+Set-Content -Path $adapterValuesFile -Value $prometheusAdapterValues
+
+Write-Info "Installing prometheus-adapter..."
+$ErrorActionPreference = 'Continue'
+$adapterOutput = helm install prometheus-adapter prometheus-community/prometheus-adapter `
+    --namespace monitoring `
+    -f $adapterValuesFile `
+    --wait `
+    --timeout 3m 2>&1
+$adapterExitCode = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+
+# Check for Azure Policy warnings
+$policyWarnings = $adapterOutput | Select-String -Pattern "azurepolicy.*has not been allowed"
+if ($policyWarnings) {
+    Write-Info "Note: Azure Policy warnings detected for prometheus-adapter (audit mode only)"
+}
+
+# Verify deployment
+$adapterStatus = helm list -n monitoring -o json 2>$null | ConvertFrom-Json
+$adapterSuccess = $adapterStatus | Where-Object { $_.name -eq "prometheus-adapter" -and $_.status -eq "deployed" }
+
+if ($adapterSuccess) {
+    Write-Success "Prometheus Adapter installed successfully"
+    Write-Info "Custom metrics API is now available for GPU-based HPA"
+} else {
+    Write-Warning "Prometheus Adapter deployment had issues, but continuing..."
+    Write-Info "GPU metrics may not be available for HPA. Check with: kubectl get apiservices | Select-String custom"
+}
+
+# Wait for Prometheus Adapter to be ready
+Write-Info "Waiting for Prometheus Adapter to be ready..."
+Start-Sleep -Seconds 10
+
 # Create ServiceMonitors for GPU and application metrics
 Write-Info "Creating ServiceMonitors for metrics collection..."
 
 # DCGM Exporter ServiceMonitor
-$dcgmServiceMonitor = @"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: dcgm-exporter
-  namespace: ollama
-  labels:
-    app.kubernetes.io/name: dcgm-exporter
-    app.kubernetes.io/component: gpu-metrics
-spec:
-  type: ClusterIP
-  ports:
-    - name: metrics
-      port: 9400
-      targetPort: 9400
-      protocol: TCP
-  selector:
-    app: dcgm-exporter
+# Note: Service is already created by k8s/11-dcgm-exporter.yaml
+# We only need to create the ServiceMonitor to tell Prometheus to scrape it
+Write-Info "Creating DCGM ServiceMonitor for Prometheus scraping..."
+if (Test-Path "$K8sManifestsDir/13-dcgm-servicemonitor.yaml") {
+    # Apply from k8s manifests to keep configuration in sync
+    kubectl apply -f "$K8sManifestsDir/13-dcgm-servicemonitor.yaml" | Out-Null
+    Write-Success "DCGM ServiceMonitor created from k8s/13-dcgm-servicemonitor.yaml"
+} else {
+    # Fallback: Create inline if file doesn't exist
+    $dcgmServiceMonitor = @"
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -919,11 +1037,12 @@ spec:
       interval: 30s
       path: /metrics
 "@
-
-$dcgmFile = Join-Path $env:TEMP "dcgm-servicemonitor.yaml"
-Set-Content -Path $dcgmFile -Value $dcgmServiceMonitor
-kubectl apply -f $dcgmFile | Out-Null
-Write-Success "DCGM ServiceMonitor created"
+    $dcgmTempFile = Join-Path $env:TEMP "dcgm-servicemonitor.yaml"
+    Set-Content -Path $dcgmTempFile -Value $dcgmServiceMonitor
+    kubectl apply -f $dcgmTempFile | Out-Null
+    Remove-Item $dcgmTempFile -ErrorAction SilentlyContinue
+    Write-Success "DCGM ServiceMonitor created (inline fallback)"
+}
 
 # Get Grafana LoadBalancer IP
 Write-Info "Retrieving Grafana LoadBalancer IP..."
@@ -979,8 +1098,9 @@ if ($grafanaIp -and $grafanaReady) {
 }
 
 # Cleanup temp files
-Remove-Item $monitoringValuesFile -ErrorAction SilentlyContinue
-Remove-Item $dcgmFile -ErrorAction SilentlyContinue
+if ($monitoringValuesFile -and (Test-Path $monitoringValuesFile)) {
+    Remove-Item $monitoringValuesFile -ErrorAction SilentlyContinue
+}
 
 Write-StepHeader "Deployment Complete!"
 
