@@ -36,6 +36,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Get the script directory for resolving relative paths
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Benchmark Runner" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
@@ -85,7 +88,7 @@ if ([string]::IsNullOrEmpty($endpoint)) {
             }
         }
         catch {
-            Write-Error "Could not determine Ollama endpoint. Use -OllamaEndpoint or -UsePortForward"
+            Write-Host "Could not determine Ollama endpoint. Use -OllamaEndpoint or -UsePortForward" -ForegroundColor Red
             exit 1
         }
     }
@@ -96,9 +99,9 @@ Write-Host "Endpoint: $endpoint" -ForegroundColor White
 Write-Host "Scenario: $Scenario" -ForegroundColor White
 Write-Host ""
 
-# Create output directory with timestamp
+# Create output directory with timestamp in the benchmarks folder
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$outputDir = "results-$timestamp"
+$outputDir = Join-Path $scriptDir "results-$timestamp"
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 Write-Host "Results will be saved to: $outputDir" -ForegroundColor Cyan
 Write-Host ""
@@ -108,7 +111,7 @@ try {
     switch ($Scenario) {
         "SingleUser" {
             Write-Host "Running Single User benchmark..." -ForegroundColor Yellow
-            .\single-user-benchmark.ps1 `
+            & "$scriptDir\single-user-benchmark.ps1" `
                 -OllamaEndpoint $endpoint `
                 -Model "llama3.1:8b" `
                 -OutputFile "$outputDir\single-user.json"
@@ -116,7 +119,7 @@ try {
 
         "MultiUser3" {
             Write-Host "Running Multi-User (3 concurrent) benchmark..." -ForegroundColor Yellow
-            .\multi-user-benchmark.ps1 `
+            & "$scriptDir\multi-user-benchmark.ps1" `
                 -OllamaEndpoint $endpoint `
                 -ConcurrentUsers 3 `
                 -OutputFile "$outputDir\multi-user-3.json"
@@ -124,7 +127,7 @@ try {
 
         "MultiUser5" {
             Write-Host "Running Multi-User (5 concurrent) benchmark..." -ForegroundColor Yellow
-            .\multi-user-benchmark.ps1 `
+            & "$scriptDir\multi-user-benchmark.ps1" `
                 -OllamaEndpoint $endpoint `
                 -ConcurrentUsers 5 `
                 -OutputFile "$outputDir\multi-user-5.json"
@@ -132,7 +135,7 @@ try {
 
         "TokensPerSecond" {
             Write-Host "Running Tokens/Second benchmark..." -ForegroundColor Yellow
-            .\tokens-per-second-benchmark.ps1 `
+            & "$scriptDir\tokens-per-second-benchmark.ps1" `
                 -OllamaEndpoint $endpoint `
                 -Models @("phi3.5", "llama3.1:8b") `
                 -PromptLengths @("Short", "Medium", "Long") `
@@ -143,29 +146,29 @@ try {
             Write-Host "Running all benchmark scenarios..." -ForegroundColor Yellow
             Write-Host ""
 
-            Write-Host "[1/3] Single User benchmark..." -ForegroundColor Cyan
-            .\single-user-benchmark.ps1 `
+            Write-Host "[1/4] Single User benchmark..." -ForegroundColor Cyan
+            & "$scriptDir\single-user-benchmark.ps1" `
                 -OllamaEndpoint $endpoint `
                 -Model "llama3.1:8b" `
                 -OutputFile "$outputDir\single-user.json"
 
             Write-Host ""
-            Write-Host "[2/3] Multi-User (3 concurrent) benchmark..." -ForegroundColor Cyan
-            .\multi-user-benchmark.ps1 `
+            Write-Host "[2/4] Multi-User (3 concurrent) benchmark..." -ForegroundColor Cyan
+            & "$scriptDir\multi-user-benchmark.ps1" `
                 -OllamaEndpoint $endpoint `
                 -ConcurrentUsers 3 `
                 -OutputFile "$outputDir\multi-user-3.json"
 
             Write-Host ""
             Write-Host "[3/4] Multi-User (5 concurrent) benchmark..." -ForegroundColor Cyan
-            .\multi-user-benchmark.ps1 `
+            & "$scriptDir\multi-user-benchmark.ps1" `
                 -OllamaEndpoint $endpoint `
                 -ConcurrentUsers 5 `
                 -OutputFile "$outputDir\multi-user-5.json"
 
             Write-Host ""
             Write-Host "[4/4] Tokens/Second benchmark..." -ForegroundColor Cyan
-            .\tokens-per-second-benchmark.ps1 `
+            & "$scriptDir\tokens-per-second-benchmark.ps1" `
                 -OllamaEndpoint $endpoint `
                 -Models @("phi3.5", "llama3.1:8b") `
                 -PromptLengths @("Short", "Medium", "Long") `

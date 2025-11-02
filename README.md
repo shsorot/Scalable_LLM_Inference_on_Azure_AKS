@@ -24,7 +24,7 @@ This architecture demonstrates:
 6. **Complete Automation** - Single-command deployment with monitoring included
 
 ### What You Get
-- ✅ **Ollama** inference server (2 replicas) serving 6 pre-loaded models (~35GB)
+- ✅ **Ollama** inference server (StatefulSet) serving 6 pre-loaded models (~35GB)
 - ✅ **Open-WebUI** chat interface (3 replicas) with document upload and RAG
 - ✅ **PostgreSQL Flexible Server** with PGVector extension for embeddings
 - ✅ **Prometheus + Grafana** monitoring stack with GPU metrics and custom dashboards
@@ -66,7 +66,6 @@ This architecture demonstrates:
 - **Azure CLI** - [Install Guide](https://learn.microsoft.com/cli/azure/install-azure-cli)
 - **kubectl** - [Install Guide](https://kubernetes.io/docs/tasks/tools/)
 - **PowerShell** - 5.1+ (Windows) or PowerShell Core 7+ (cross-platform)
-- **Python 3.8+** - Required for PGVector setup scripts
 - **HuggingFace Token** (optional) - For downloading gated models
 
 ### Verify Prerequisites
@@ -78,9 +77,6 @@ az version
 # Check kubectl
 kubectl version --client
 
-# Install Python dependencies
-pip install psycopg2-binary
-
 # Login to Azure
 az login
 az account show
@@ -91,14 +87,14 @@ az account show
 ### Step 1: Clone and Navigate
 
 ```powershell
-git clone <repository-url>
-cd llm-demo/scripts
+git clone https://github.com/shsorot/Scalable_LLM_Inference_on_Azure_AKS.git
+cd Scalable_LLM_Inference_on_Azure_AKS
 ```
 
 ### Step 2: Deploy Everything (Single Command)
 
 ```powershell
-.\deploy.ps1 -Prefix <your-prefix> -Location northeurope -AutoApprove -HuggingFaceToken <optional>
+.\scripts\deploy.ps1 -Prefix <your-prefix> -Location northeurope -AutoApprove -HuggingFaceToken <optional>
 ```
 
 **Parameters:**
@@ -229,7 +225,7 @@ az aks start --resource-group <prefix>-rg --name <prefix>-aks-...
 │  │  ┌──────────────────┐       ┌───────────────────────┐   │    │
 │  │  │ Prometheus       │       │ Ollama StatefulSet    │   │    │
 │  │  │ Grafana          │       │ - ollama-0 (GPU)      │   │    │
-│  │  │ Monitoring Stack │       │ - ollama-1 (GPU)      │   │    │
+│  │  │ Monitoring Stack │       │   (scales to N)       │   │    │
 │  │  └──────────────────┘       └───────────────────────┘   │    │
 │  │                              ┌───────────────────────┐   │    │
 │  │                              │ Open-WebUI Deployment │   │    │
@@ -278,7 +274,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed diagrams and design rational
 ## 📁 Project Structure
 
 ```
-llm-demo/
+Scalable_LLM_Inference_on_Azure_AKS/
 ├── bicep/                      # Azure infrastructure templates
 │   ├── main.bicep             # Main orchestration
 │   ├── aks.bicep              # AKS cluster with GPU nodes
@@ -290,16 +286,36 @@ llm-demo/
 │   ├── 02-storage-premium.yaml
 │   ├── 05-ollama-statefulset.yaml
 │   ├── 06-ollama-service.yaml
-│   ├── 06-postgres.yaml
 │   ├── 07-webui-deployment.yaml
 │   ├── 08-webui-service.yaml
-│   └── 09-resource-quota.yaml
-└── scripts/                   # Deployment automation
-    ├── deploy.ps1             # Main deployment script
-    ├── cleanup.ps1            # Cleanup script
-    ├── preload-multi-models.ps1
-    ├── enable-pgvector.py
-    └── wipe-database.py
+│   ├── 09-resource-quota.yaml
+│   ├── 10-webui-hpa.yaml
+│   ├── 11-dcgm-exporter.yaml
+│   ├── 12-ollama-hpa.yaml
+│   └── 13-dcgm-servicemonitor.yaml
+├── scripts/                   # Deployment automation (see scripts/README.md)
+│   ├── Common.ps1             # Shared functions library
+│   ├── deploy.ps1             # Main deployment script
+│   ├── cleanup.ps1            # Cleanup script
+│   ├── preload-multi-models.ps1
+│   ├── set-models-public.ps1
+│   ├── test-scaling.ps1
+│   ├── verify-deployment-ready.ps1
+│   ├── verify-gpu-metrics.ps1
+│   └── README.md              # Detailed script documentation
+├── benchmarks/                # Performance testing (see benchmarks/README.md)
+│   ├── benchmark.ps1          # Unified benchmark suite
+│   └── README.md              # Benchmark documentation
+├── dashboards/                # Grafana dashboards
+│   ├── gpu-monitoring.json
+│   └── llm-platform-overview.json
+├── docs/                      # Additional documentation
+│   ├── AUTOSCALING.md
+│   ├── BENCHMARK.md
+│   └── MONITORING.md
+├── ARCHITECTURE.md            # System architecture overview
+├── DEPLOYMENT.md              # Detailed deployment guide
+└── CHANGELOG.md               # Version history
 ```
 
 ## 📦 Storage Strategy: Choosing the Right Storage
@@ -641,10 +657,10 @@ Estimated daily cost: ~$15-25 USD (with 8 hours active usage)
 
 ### Pre-load Specific Models
 
-Edit `scripts/preload-multi-models.ps1` to customize the model list:
+Use the `-Models` parameter to customize which models to download:
 
 ```powershell
-[string[]]$Models = @(
+.\scripts\preload-multi-models.ps1 -Models @(
     "phi3.5",           # 2.3GB
     "llama3.1:8b",      # 4.7GB
     "mistral:7b",       # 4.1GB
@@ -654,19 +670,29 @@ Edit `scripts/preload-multi-models.ps1` to customize the model list:
 )
 ```
 
+Or test without downloading:
+
+```powershell
+.\scripts\preload-multi-models.ps1 -DryRun
+```
+
+See `scripts/README.md` for more details.
+
 ### Scale Open-WebUI Replicas
 
 ```powershell
 kubectl scale deployment open-webui -n ollama --replicas=5
 ```
 
-### Check PGVector Status
+### Verify Deployment Status
 
 ```powershell
-python scripts/enable-pgvector.py
+.\scripts\verify-deployment-ready.ps1 -Prefix <your-prefix>
 ```
 
-## 📊 Monitoring
+## 📊 Monitoring & Benchmarking
+
+### Monitoring Commands
 
 ```powershell
 # Check pod status
@@ -681,6 +707,26 @@ kubectl logs -n ollama deployment/open-webui --tail=50
 # Check GPU allocation
 kubectl describe nodes -l agentpool=gpu
 ```
+
+### Performance Benchmarking
+
+Run comprehensive benchmarks across all models:
+
+```powershell
+# Run all benchmarks (single-user, multi-user, all models)
+.\benchmarks\benchmark.ps1 -Mode AllModels
+
+# Test specific model
+.\benchmarks\benchmark.ps1 -Mode SingleModel -Model "phi3.5"
+
+# Multi-user test (3 concurrent users)
+.\benchmarks\benchmark.ps1 -Mode MultiUser -Users 3
+
+# Generate HTML report
+.\benchmarks\benchmark.ps1 -Mode Report
+```
+
+See `benchmarks/README.md` for detailed benchmark documentation and result analysis.
 
 ## 🐛 Troubleshooting
 
@@ -706,12 +752,18 @@ for container node-exporter has not been allowed.
 
 ### Open-WebUI Pods CrashLoopBackOff
 
-**Cause**: PGVector extensions not enabled
+**Cause**: PostgreSQL connection issues or PGVector extension not enabled
 
 **Solution**:
 ```powershell
-python scripts/enable-pgvector.py
+# Check PostgreSQL connection
+kubectl logs -n ollama deployment/open-webui --tail=50
+
+# Restart pods
 kubectl delete pods -n ollama -l app=open-webui
+
+# Verify deployment status
+.\scripts\verify-deployment-ready.ps1 -Prefix <your-prefix>
 ```
 
 ### Model Download Timeouts

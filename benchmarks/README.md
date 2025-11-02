@@ -1,130 +1,257 @@
-# Benchmark Scripts
+# Benchmark Suite# Benchmark Scripts
 
-This folder contains scripts to measure model download and load performance in different scenarios.
 
-## Prerequisites
 
-- **PowerShell 7.x** (Windows/Linux/macOS)
-- **Access to Ollama API endpoint** (e.g., via port-forward or LoadBalancer IP)
-- **kubectl** configured (for port-forwarding if needed)
+Comprehensive LLM benchmarking tool for Ollama inference testing on Azure AKS.This folder contains scripts to measure model download and load performance in different scenarios.
 
-## Scripts
+
+
+## Quick Start## Prerequisites
+
+
+
+```powershell- **PowerShell 7.x** (Windows/Linux/macOS)
+
+# 1. Start port-forward to Ollama service- **Access to Ollama API endpoint** (e.g., via port-forward or LoadBalancer IP)
+
+kubectl port-forward -n ollama service/ollama 11434:11434- **kubectl** configured (for port-forwarding if needed)
+
+
+
+# 2. Test connection## Scripts
+
+.\benchmark.ps1 -Mode Connection -OllamaEndpoint "http://localhost:11434"
 
 ### 1. `single-user-benchmark.ps1`
 
-Measures single user downloading and loading a single model.
+# 3. Run benchmarks
 
-**What it measures:**
-- Model download time (pull from registry)
-- Cold start load time (first inference)
+.\benchmark.ps1 -Mode AllModels -OllamaEndpoint "http://localhost:11434"Measures single user downloading and loading a single model.
+
+
+
+# 4. Generate HTML report**What it measures:**
+
+.\benchmark.ps1 -Mode Report- Model download time (pull from registry)
+
+```- Cold start load time (first inference)
+
 - Warm start load time (subsequent inference)
-- Token generation throughput
 
-**Usage:**
+## Features- Token generation throughput
 
-```powershell
-# Via port-forward
-kubectl port-forward -n ollama service/ollama 11434:11434
+
+
+- **Single Model Testing**: Measure cold start, warm start, and throughput**Usage:**
+
+- **All Models Testing**: Automatically benchmark all available models
+
+- **Multi-User Testing**: Simulate concurrent user load```powershell
+
+- **Connection Testing**: Verify Ollama API connectivity# Via port-forward
+
+- **HTML Reports**: Beautiful visual reports with performance metricskubectl port-forward -n ollama service/ollama 11434:11434
+
+- **Result Comparison**: Compare results from specific benchmark runs
 
 # Run benchmark
-.\single-user-benchmark.ps1 -OllamaEndpoint "http://localhost:11434" -Model "llama3.1:8b"
 
-# Via LoadBalancer IP
+## Usage.\single-user-benchmark.ps1 -OllamaEndpoint "http://localhost:11434" -Model "llama3.1:8b"
+
+
+
+### 1. Test Connection# Via LoadBalancer IP
+
 .\single-user-benchmark.ps1 -OllamaEndpoint "http://20.54.123.45:11434" -Model "phi3.5"
-```
 
-**Parameters:**
+```powershell```
+
+.\benchmark.ps1 -Mode Connection -OllamaEndpoint "http://localhost:11434"
+
+```**Parameters:**
+
 - `-OllamaEndpoint` (required): Ollama API endpoint URL
-- `-Model` (optional): Model name (default: `llama3.1:8b`)
+
+### 2. Single Model Benchmark- `-Model` (optional): Model name (default: `llama3.1:8b`)
+
 - `-OutputFile` (optional): JSON output file (default: `single-user-results.json`)
 
-**Output:**
-```json
+```powershell
+
+.\benchmark.ps1 -Mode SingleModel -Model "mistral:7b" -OllamaEndpoint "http://localhost:11434"**Output:**
+
+``````json
+
 {
-  "Timestamp": "2025-10-31 14:30:00",
+
+### 3. All Models Benchmark  "Timestamp": "2025-10-31 14:30:00",
+
   "Model": "llama3.1:8b",
-  "OllamaEndpoint": "http://localhost:11434",
-  "Measurements": {
-    "DownloadTimeSeconds": 45.67,
+
+```powershell  "OllamaEndpoint": "http://localhost:11434",
+
+.\benchmark.ps1 -Mode AllModels -OllamaEndpoint "http://localhost:11434"  "Measurements": {
+
+```    "DownloadTimeSeconds": 45.67,
+
     "LoadTimeColdSeconds": 18.32,
-    "LoadTimeWarmSeconds": 2.14,
+
+### 4. Multi-User Test    "LoadTimeWarmSeconds": 2.14,
+
     "TotalTimeSeconds": 63.99,
-    "TokensPerSecond": 42.5,
-    "DownloadStatus": "Success",
-    "LoadStatus": "Success"
+
+```powershell    "TokensPerSecond": 42.5,
+
+.\benchmark.ps1 -Mode MultiUser -Model "mistral:7b" -Users 5 -OllamaEndpoint "http://localhost:11434"    "DownloadStatus": "Success",
+
+```    "LoadStatus": "Success"
+
   }
-}
+
+### 5. Generate HTML Report}
+
 ```
 
----
+```powershell
+
+.\benchmark.ps1 -Mode Report---
+
+```
 
 ### 2. `tokens-per-second-benchmark.ps1`
 
+### 6. Compare Results
+
 Measures inference throughput (tokens/second) performance across different configurations.
 
-**What it measures:**
-- Tokens per second for different models (small to large)
-- Performance impact of prompt length (short, medium, long, very long)
-- Throughput under concurrent requests
-- Statistical variance and consistency
-- Model efficiency comparison
-
-**Usage:**
-
 ```powershell
-# Via port-forward - test default models
-kubectl port-forward -n ollama service/ollama 11434:11434
-.\tokens-per-second-benchmark.ps1 -OllamaEndpoint "http://localhost:11434"
 
-# Test specific models with concurrent requests
+.\benchmark.ps1 -Mode Compare -ResultsDir "results-20251102-192535"**What it measures:**
+
+```- Tokens per second for different models (small to large)
+
+- Performance impact of prompt length (short, medium, long, very long)
+
+## Performance Baselines- Throughput under concurrent requests
+
+- Statistical variance and consistency
+
+Based on NVIDIA T4 GPU (Standard_NC8as_T4_v3):- Model efficiency comparison
+
+
+
+| Model | Size | Cold Start | Warm Start | Throughput | Best Use Case |**Usage:**
+
+|-------|------|-----------|-----------|------------|--------------|
+
+| gemma2:2b | 1.6GB | ~13s | ~1s | 25+ tok/s | Fast responses |```powershell
+
+| phi3.5 | 2.2GB | ~14s | ~2s | 20+ tok/s | Balanced |# Via port-forward - test default models
+
+| mistral:7b | 4.4GB | ~17s | ~4s | 12+ tok/s | General purpose |kubectl port-forward -n ollama service/ollama 11434:11434
+
+| llama3.1:8b | 4.9GB | ~26s | ~4s | 10+ tok/s | High quality |.\tokens-per-second-benchmark.ps1 -OllamaEndpoint "http://localhost:11434"
+
+| deepseek-r1 | 5.2GB | ~40s | ~20s | 9+ tok/s | Reasoning |
+
+| gpt-oss | 13GB | ~60s+ | ~5s | 12+ tok/s | Large context |# Test specific models with concurrent requests
+
 .\tokens-per-second-benchmark.ps1 `
-    -OllamaEndpoint "http://localhost:11434" `
+
+## File Structure    -OllamaEndpoint "http://localhost:11434" `
+
     -Models @("phi3.5", "llama3.1:8b") `
-    -ConcurrentRequests 3
 
-# Test all prompt lengths
-.\tokens-per-second-benchmark.ps1 `
-    -OllamaEndpoint "http://localhost:11434" `
-    -PromptLengths @("All") `
-    -MeasurementRuns 10
-```
+```    -ConcurrentRequests 3
 
-**Parameters:**
+benchmarks/
+
+├── benchmark.ps1              # Main consolidated script# Test all prompt lengths
+
+├── benchmark-report.html      # Generated HTML report.\tokens-per-second-benchmark.ps1 `
+
+├── README.md                  # This file    -OllamaEndpoint "http://localhost:11434" `
+
+└── results-YYYYMMDD-HHMMSS/  # Result directories    -PromptLengths @("All") `
+
+    ├── model-name.json        # Individual model results    -MeasurementRuns 10
+
+    ├── multi-user-X.json      # Multi-user test results```
+
+    └── summary.json           # Summary of all tests
+
+```**Parameters:**
+
 - `-OllamaEndpoint` (required): Ollama API endpoint URL
-- `-Models` (optional): Array of models to test (default: `phi3.5`, `gemma2:2b`, `llama3.1:8b`)
-- `-PromptLengths` (optional): Test prompt lengths: `Short`, `Medium`, `Long`, `VeryLong`, `All`
-- `-GenerationTokens` (optional): Target tokens to generate (default: 100)
-- `-WarmupRuns` (optional): Warmup iterations (default: 2)
-- `-MeasurementRuns` (optional): Measurement iterations (default: 5)
-- `-ConcurrentRequests` (optional): Concurrent requests (default: 1)
-- `-OutputFile` (optional): JSON output file (default: `tokens-per-second-results.json`)
 
-**Output:**
-```json
-{
+## Best Practices- `-Models` (optional): Array of models to test (default: `phi3.5`, `gemma2:2b`, `llama3.1:8b`)
+
+- `-PromptLengths` (optional): Test prompt lengths: `Short`, `Medium`, `Long`, `VeryLong`, `All`
+
+### Connection Stability- `-GenerationTokens` (optional): Target tokens to generate (default: 100)
+
+- `-WarmupRuns` (optional): Warmup iterations (default: 2)
+
+Use persistent port-forward for multiple tests:- `-MeasurementRuns` (optional): Measurement iterations (default: 5)
+
+- `-ConcurrentRequests` (optional): Concurrent requests (default: 1)
+
+```powershell- `-OutputFile` (optional): JSON output file (default: `tokens-per-second-results.json`)
+
+# Start in background
+
+$job = Start-Job -ScriptBlock { **Output:**
+
+    kubectl port-forward -n ollama service/ollama 11434:11434 ```json
+
+}{
+
   "Timestamp": "2025-10-31 16:00:00",
-  "Configuration": {
-    "GenerationTokens": 100,
+
+# Run benchmarks  "Configuration": {
+
+.\benchmark.ps1 -Mode AllModels -OllamaEndpoint "http://localhost:11434"    "GenerationTokens": 100,
+
     "ConcurrentRequests": 1
-  },
-  "Summary": {
-    "OverallAverageTokensPerSecond": 42.5,
+
+# Stop when done  },
+
+$job | Stop-Job; $job | Remove-Job  "Summary": {
+
+```    "OverallAverageTokensPerSecond": 42.5,
+
     "OverallMinTokensPerSecond": 38.2,
-    "OverallMaxTokensPerSecond": 47.8,
+
+### Recommended Test Sequence    "OverallMaxTokensPerSecond": 47.8,
+
     "TotalTests": 9,
-    "TotalSamples": 45
-  },
-  "ModelResults": [
+
+```powershell    "TotalSamples": 45
+
+# 1. Verify connection  },
+
+.\benchmark.ps1 -Mode Connection -OllamaEndpoint "http://localhost:11434"  "ModelResults": [
+
     {
-      "Model": "llama3.1:8b",
-      "PromptResults": [
+
+# 2. Test all models      "Model": "llama3.1:8b",
+
+.\benchmark.ps1 -Mode AllModels -OllamaEndpoint "http://localhost:11434"      "PromptResults": [
+
         {
-          "PromptLength": "Short",
-          "Statistics": {
+
+# 3. Test multi-user          "PromptLength": "Short",
+
+.\benchmark.ps1 -Mode MultiUser -Model "gemma2:2b" -Users 3 -OllamaEndpoint "http://localhost:11434"          "Statistics": {
+
             "AverageTokensPerSecond": 43.2,
-            "StdDevTokensPerSecond": 1.8
-          }
-        }
+
+# 4. Generate report            "StdDevTokensPerSecond": 1.8
+
+.\benchmark.ps1 -Mode Report          }
+
+```        }
+
       ]
     }
   ]
@@ -133,7 +260,90 @@ kubectl port-forward -n ollama service/ollama 11434:11434
 
 ---
 
-### 3. `multi-user-benchmark.ps1`
+### 3. `run-benchmarks.ps1`
+
+Convenience script to run common benchmark scenarios with automatic port-forwarding.
+
+**What it does:**
+- Automatically sets up kubectl port-forward if needed
+- Runs predefined benchmark scenarios
+- Organizes results in timestamped directories
+- Supports all benchmark types in one command
+
+**Usage:**
+
+```powershell
+# Run all scenarios (single-user, multi-user-3, multi-user-5, tokens-per-second)
+.\run-benchmarks.ps1 -Scenario AllScenarios -UsePortForward
+
+# Run only single user test
+.\run-benchmarks.ps1 -Scenario SingleUser -UsePortForward
+
+# Run with direct endpoint (no port-forward)
+.\run-benchmarks.ps1 -Scenario MultiUser3 -OllamaEndpoint "http://20.54.123.45:11434"
+```
+
+**Parameters:**
+- `-Scenario`: `SingleUser`, `MultiUser3`, `MultiUser5`, `TokensPerSecond`, or `AllScenarios`
+- `-UsePortForward`: Automatically set up kubectl port-forward
+- `-OllamaEndpoint`: Direct endpoint URL (overrides port-forward)
+
+**Output:**
+Results saved to `results-YYYYMMDD-HHMMSS/` directory with separate JSON files for each test.
+
+---
+
+### 4. `generate-report.ps1`
+
+Generates a beautiful HTML report from all benchmark results.
+
+**What it does:**
+- Scans all `results-*` directories
+- Aggregates metrics across all test runs
+- Creates visual HTML report with tables and summary cards
+- Color-codes performance metrics (good/average/poor)
+
+**Usage:**
+
+```powershell
+# Generate report from all results
+.\generate-report.ps1
+
+# Open report in browser
+Invoke-Item .\benchmark-report.html
+
+# Custom output location
+.\generate-report.ps1 -OutputFile "C:\reports\llm-benchmark-report.html"
+```
+
+**Report includes:**
+- Summary statistics (total runs, tests, models)
+- Single user performance table (all runs)
+- Multi-user concurrent performance (3 and 5 users)
+- Color-coded metrics for easy interpretation
+- Responsive design for desktop and mobile
+
+---
+
+### 5. `compare-results.ps1`
+
+Compare multiple benchmark result files side-by-side.
+
+**Usage:**
+
+```powershell
+# Compare two single-user runs
+.\compare-results.ps1 `
+    -ResultFiles @("results-20251102-180750\single-user.json", "results-20251102-182723\single-user.json")
+
+# Compare multi-user results
+.\compare-results.ps1 `
+    -ResultFiles @("results-*/multi-user-3.json")
+```
+
+---
+
+### 6. `multi-user-benchmark.ps1`
 
 Simulates multiple concurrent users downloading and loading different models simultaneously.
 

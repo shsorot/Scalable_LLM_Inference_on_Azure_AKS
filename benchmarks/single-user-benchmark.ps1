@@ -77,24 +77,30 @@ function Invoke-OllamaAPI {
         return $response
     }
     catch {
-        Write-Error "API call failed: $_"
+        Write-Host "API call failed to $uri" -ForegroundColor Red
+        Write-Host "Error: $_" -ForegroundColor Red
+        Write-Host "Exception: $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.Exception.InnerException) {
+            Write-Host "Inner Exception: $($_.Exception.InnerException.Message)" -ForegroundColor Red
+        }
         throw
     }
 }
 
-# Step 1: Check if model already exists
+# Step 1: Check if model already exists and delete for clean benchmark
 Write-Host "[1/4] Checking if model exists..." -ForegroundColor Yellow
+$modelExists = $false
 try {
     $listResponse = Invoke-OllamaAPI -Endpoint $OllamaEndpoint -Path "/api/tags" -Method "Get"
     $modelExists = $listResponse.models | Where-Object { $_.name -eq $Model }
 
     if ($modelExists) {
         Write-Host "  Model already exists. Deleting for clean benchmark..." -ForegroundColor Yellow
-        # Delete model using DELETE method
-        $deleteBody = @{ name = $Model }
-        Invoke-OllamaAPI -Endpoint $OllamaEndpoint -Path "/api/delete" -Body $deleteBody -Method "Delete"
+        # Delete via kubectl exec to avoid API timeout issues
+        Write-Host "  Using kubectl to delete model..." -ForegroundColor Cyan
+        kubectl exec -n ollama ollama-0 -- ollama rm $Model 2>&1 | Out-Null
+        Start-Sleep -Seconds 3
         Write-Host "  Model deleted." -ForegroundColor Green
-        Start-Sleep -Seconds 5
     }
     else {
         Write-Host "  Model does not exist. Ready for benchmark." -ForegroundColor Green
@@ -104,19 +110,18 @@ catch {
     Write-Warning "Could not check model existence: $_"
 }
 
-# Step 2: Measure model download time (pull)
+# Step 2: Measure model download time (pull) - use kubectl exec for reliability
 Write-Host ""
 Write-Host "[2/4] Measuring model download time..." -ForegroundColor Yellow
 
 $pullStart = Get-Date
 try {
-    $pullBody = @{
-        name = $Model
-        stream = $false
-    }
-
     Write-Host "  Starting pull at: $($pullStart.ToString('HH:mm:ss.fff'))"
-    $pullResponse = Invoke-OllamaAPI -Endpoint $OllamaEndpoint -Path "/api/pull" -Body $pullBody
+    Write-Host "  Using kubectl exec for reliable download..." -ForegroundColor Cyan
+
+    # Use kubectl exec which is more reliable than API for large downloads
+    $pullOutput = kubectl exec -n ollama ollama-0 -- ollama pull $Model 2>&1
+
     $pullEnd = Get-Date
     $pullDuration = ($pullEnd - $pullStart).TotalSeconds
 
@@ -127,7 +132,7 @@ try {
     $results.Measurements.DownloadStatus = "Success"
 }
 catch {
-    Write-Error "Model pull failed: $_"
+    Write-Host "Model pull failed: $_" -ForegroundColor Red
     $results.Measurements.DownloadStatus = "Failed"
     $results.Measurements.DownloadError = $_.Exception.Message
     $results | ConvertTo-Json -Depth 10 | Out-File -FilePath $OutputFile -Encoding utf8
@@ -165,7 +170,7 @@ try {
     }
 }
 catch {
-    Write-Error "Model load failed: $_"
+    Write-Host "Model load failed: $_" -ForegroundColor Red
     $results.Measurements.LoadStatus = "Failed"
     $results.Measurements.LoadError = $_.Exception.Message
     $results | ConvertTo-Json -Depth 10 | Out-File -FilePath $OutputFile -Encoding utf8

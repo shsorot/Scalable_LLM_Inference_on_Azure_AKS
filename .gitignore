@@ -5,6 +5,7 @@ temp/
 
 # Benchmark results
 benchmarks/results-*/
+benchmarks/benchmark-report.html
 
 # Booth demo generated files (created at deployment time)
 booth-card.html

@@ -25,9 +25,10 @@ This deployment demonstrates a production-ready LLM inference platform on Azure 
 │  │  │  ┌────────────────┐       ┌─────────────────┐   │  │ │
 │  │  │  │ Ollama         │       │ Open-WebUI      │   │  │ │
 │  │  │  │ StatefulSet    │◄──────┤ Deployment      │   │  │ │
-│  │  │  │ (1 replica)    │       │ (3 replicas)    │   │  │ │
-│  │  │  │ - GPU: 1x T4   │       │ - LoadBalancer  │   │  │ │
-│  │  │  │ - Port: 11434  │       │ - Port: 80      │   │  │ │
+│  │  │  │ (starts 1      │       │ (3 replicas)    │   │  │ │
+│  │  │  │  scales to N)  │       │ - LoadBalancer  │   │  │ │
+│  │  │  │ - GPU: 1x T4   │       │ - Port: 80      │   │  │ │
+│  │  │  │ - Port: 11434  │       │                 │   │  │ │
 │  │  │  └────────┬───────┘       └────────┬────────┘   │  │ │
 │  │  │           │                        │            │  │ │
 │  │  │           │                        │            │  │ │

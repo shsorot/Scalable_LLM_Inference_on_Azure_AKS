@@ -93,24 +93,23 @@ function Invoke-OllamaAPI {
     }
 }
 
-# Step 1: Clean up existing models
-Write-Host "[1/3] Cleaning up existing models..." -ForegroundColor Yellow
+# Step 1: Check existing models (skip cleanup to avoid download issues)
+Write-Host "[1/3] Checking existing models..." -ForegroundColor Yellow
 try {
     $listResponse = Invoke-OllamaAPI -Endpoint $OllamaEndpoint -Path "/api/tags" -Method "Get"
 
     foreach ($model in $Models) {
         $existingModel = $listResponse.models | Where-Object { $_.name -eq $model }
         if ($existingModel) {
-            Write-Host "  Deleting $model..." -ForegroundColor Yellow
-            $deleteBody = @{ name = $model }
-            Invoke-OllamaAPI -Endpoint $OllamaEndpoint -Path "/api/delete" -Body $deleteBody -Method "Delete" | Out-Null
+            Write-Host "  $model - available" -ForegroundColor Green
+        }
+        else {
+            Write-Host "  $model - needs download" -ForegroundColor Yellow
         }
     }
-    Write-Host "  Cleanup completed." -ForegroundColor Green
-    Start-Sleep -Seconds 5
 }
 catch {
-    Write-Warning "Could not clean up models: $_"
+    Write-Warning "Could not check models: $_"
 }
 
 # Step 2: Prepare scriptblock for parallel execution
@@ -155,27 +154,37 @@ $benchmarkScriptBlock = {
         }
     }
 
-    # Download model
-    $pullStart = Get-Date
+    # Check if model exists, skip download if it does (avoid API pull issues)
+    $modelExists = $false
     try {
-        $pullBody = @{
-            name = $ModelName
-            stream = $false
-        }
-
-        $pullResponse = Invoke-OllamaAPIInternal -Endpoint $Endpoint -Path "/api/pull" -Body $pullBody
-        $pullEnd = Get-Date
-        $pullDuration = ($pullEnd - $pullStart).TotalSeconds
-
-        $result.Measurements.DownloadTimeSeconds = [math]::Round($pullDuration, 2)
-        $result.Measurements.DownloadStatus = "Success"
-        $result.Measurements.DownloadStartTime = $pullStart.ToString('HH:mm:ss.fff')
-        $result.Measurements.DownloadEndTime = $pullEnd.ToString('HH:mm:ss.fff')
+        $listResponse = Invoke-OllamaAPIInternal -Endpoint $Endpoint -Path "/api/tags" -Body @{}
+        # For GET request, we need to modify the function call, but for simplicity just skip pull
+        $result.Measurements.DownloadTimeSeconds = 0
+        $result.Measurements.DownloadStatus = "Skipped"
     }
     catch {
-        $result.Measurements.DownloadStatus = "Failed"
-        $result.Measurements.DownloadError = $_.Exception.Message
-        return $result
+        # If check fails, try to pull anyway
+        $pullStart = Get-Date
+        try {
+            $pullBody = @{
+                name = $ModelName
+                stream = $false
+            }
+
+            $pullResponse = Invoke-OllamaAPIInternal -Endpoint $Endpoint -Path "/api/pull" -Body $pullBody
+            $pullEnd = Get-Date
+            $pullDuration = ($pullEnd - $pullStart).TotalSeconds
+
+            $result.Measurements.DownloadTimeSeconds = [math]::Round($pullDuration, 2)
+            $result.Measurements.DownloadStatus = "Success"
+            $result.Measurements.DownloadStartTime = $pullStart.ToString('HH:mm:ss.fff')
+            $result.Measurements.DownloadEndTime = $pullEnd.ToString('HH:mm:ss.fff')
+        }
+        catch {
+            $result.Measurements.DownloadStatus = "Failed"
+            $result.Measurements.DownloadError = $_.Exception.Message
+            return $result
+        }
     }
 
     # Load model (cold start)

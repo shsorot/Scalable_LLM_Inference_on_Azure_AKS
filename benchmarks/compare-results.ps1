@@ -57,7 +57,7 @@ foreach ($file in $ResultFiles) {
 }
 
 if ($results.Count -eq 0) {
-    Write-Error "No valid result files loaded."
+    Write-Host "No valid result files loaded." -ForegroundColor Red
     exit 1
 }
 

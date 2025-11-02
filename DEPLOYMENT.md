@@ -37,7 +37,6 @@ Complete step-by-step guide for deploying the Azure AKS LLM Demo.
 - Azure CLI 2.50.0 or later
 - kubectl 1.27 or later
 - PowerShell 5.1+ (Windows) or PowerShell Core 7+ (cross-platform)
-- Python 3.8 or later
 - Git
 
 **Installation:**
@@ -49,13 +48,9 @@ winget install Microsoft.AzureCLI
 # Install kubectl
 az aks install-cli
 
-# Install Python dependencies
-pip install psycopg2-binary
-
 # Verify installations
 az --version
 kubectl version --client
-python --version
 ```
 
 ### Azure Login
@@ -77,9 +72,9 @@ az account show
 ### 1-Command Deployment
 
 ```powershell
-git clone <repository-url>
-cd llm-demo/scripts
-.\deploy.ps1 -Prefix <your-prefix> -Location northeurope -AutoApprove
+git clone https://github.com/shsorot/Scalable_LLM_Inference_on_Azure_AKS.git
+cd Scalable_LLM_Inference_on_Azure_AKS
+.\scripts\deploy.ps1 -Prefix <your-prefix> -Location northeurope -AutoApprove
 ```
 
 **Parameters:**
@@ -95,11 +90,8 @@ cd llm-demo/scripts
 
 ```powershell
 # Clone repository
-git clone <repository-url>
-cd llm-demo
-
-# Install Python dependencies
-pip install psycopg2-binary
+git clone https://github.com/shsorot/Scalable_LLM_Inference_on_Azure_AKS.git
+cd Scalable_LLM_Inference_on_Azure_AKS
 
 # Verify Azure CLI login
 az account show
@@ -360,7 +352,7 @@ kubectl rollout restart deployment open-webui -n ollama
 
 **Symptoms:**
 ```
-ERROR: Operation failed with status: 'Bad Request'. Details: Requested VM size Standard_NC4as_T4_v3 
+ERROR: Operation failed with status: 'Bad Request'. Details: Requested VM size Standard_NC4as_T4_v3
 is not available in location 'westus2'. Please try another location or choose a different VM size.
 ```
 
