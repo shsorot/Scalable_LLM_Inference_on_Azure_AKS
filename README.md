@@ -137,7 +137,8 @@ Open-WebUI URL    : http://20.54.123.45
 
 Grafana Dashboard : http://20.54.123.67
   └─ Username: admin
-  └─ Password: admin123!
+  └─ Password: <randomly-generated>
+  └─ (also stored in Key Vault: grafana-admin-password)
 
 --- Pre-loaded Models (35GB) ---
 ✓ phi3.5 (2.3GB)
@@ -164,7 +165,7 @@ Grafana Dashboard : http://20.54.123.67
 
 ### Step 6: Monitor Performance
 
-1. **Access Grafana** - Navigate to Grafana URL (admin / admin123!)
+1. **Access Grafana** - Navigate to Grafana URL (use credentials from deployment output)
 2. **Browse Dashboards**:
    - **GPU Monitoring** - GPU utilization, memory, temperature
    - **LLM Platform Overview** - Pod status, inference rates, latency

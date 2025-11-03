@@ -43,7 +43,9 @@ This LLM platform includes comprehensive monitoring using **Prometheus + Grafana
 - **Storage**: 10GB PVC for dashboard persistence
 - **Default Credentials**:
   - Username: `admin`
-  - Password: `admin123!` (change after first login)
+  - Password: Randomly generated during deployment
+  - Password stored in Azure Key Vault: `grafana-admin-password`
+  - Password displayed in deployment output
 
 ### 3. **DCGM Exporter**
 - **Purpose**: NVIDIA GPU metrics (already deployed in k8s/11-dcgm-exporter.yaml)
@@ -85,7 +87,30 @@ kubectl get svc -n monitoring monitoring-grafana
 kubectl port-forward -n monitoring svc/monitoring-grafana 3000:80
 
 # Open: http://localhost:3000
-# Login: admin / admin123!
+# Login: admin / <use password from deployment output or Key Vault>
+```
+
+### Retrieve Grafana Password
+
+If you need to retrieve the Grafana password:
+
+```powershell
+# From Azure Key Vault (replace <prefix> with your deployment prefix)
+az keyvault secret show `
+    --vault-name "<prefix>-kv-<uniqueid>" `
+    --name "grafana-admin-password" `
+    --query "value" `
+    -o tsv
+
+# Or list all Key Vaults in resource group first
+az keyvault list --resource-group "<prefix>-rg" --query "[].name" -o tsv
+
+# Then retrieve the password
+az keyvault secret show `
+    --vault-name "<keyvault-name>" `
+    --name "grafana-admin-password" `
+    --query "value" `
+    -o tsv
 ```
 
 ## Pre-Configured Dashboards

@@ -48,6 +48,16 @@ Write-Verbose "Working directory: $(Get-Location)"
 # Load System.Web assembly for URL encoding
 Add-Type -AssemblyName System.Web
 
+# Function to generate secure random password
+function New-RandomPassword {
+    param(
+        [int]$Length = 16
+    )
+    $chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+    $password = -join ((1..$Length) | ForEach-Object { $chars[(Get-Random -Maximum $chars.Length)] })
+    return $password
+}
+
 # Trap all errors and show them
 $ErrorActionPreference = "Stop"
 $VerbosePreference = "Continue"
@@ -184,6 +194,12 @@ $PostgresPassword = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 2
 $PostgresPassword = $PostgresPassword + "!@#"
 Write-Success "PostgreSQL admin password generated (will be stored in Key Vault)"
 
+Write-StepHeader "Generating Grafana Admin Password"
+
+# Generate secure random password for Grafana
+$GrafanaPassword = New-RandomPassword -Length 16
+Write-Success "Grafana admin password generated (will be stored in Key Vault)"
+
 Write-Info "Deploying Bicep template (this takes 8-10 minutes)..."
 Write-Info "Progress will be shown below. Please wait..."
 Write-Host ""
@@ -280,6 +296,19 @@ if ($LASTEXITCODE -eq 0) {
     Write-Success "PostgreSQL connection string stored in Key Vault"
 } else {
     Write-Warning "Failed to store connection string in Key Vault"
+}
+
+Write-Info "Storing Grafana admin password in Key Vault..."
+az keyvault secret set `
+    --vault-name $keyVaultName `
+    --name "grafana-admin-password" `
+    --value $GrafanaPassword `
+    --output none
+
+if ($LASTEXITCODE -eq 0) {
+    Write-Success "Grafana password stored in Key Vault"
+} else {
+    Write-Warning "Failed to store Grafana password in Key Vault"
 }
 
 Write-StepHeader "Configuring kubectl and RBAC"
@@ -815,7 +844,7 @@ prometheus:
     tolerations: *commonTolerations
 
 grafana:
-  adminPassword: admin123!
+  adminPassword: $GrafanaPassword
   service:
     type: LoadBalancer
   tolerations: *commonTolerations
@@ -1073,7 +1102,7 @@ if ($grafanaIp -and $grafanaReady) {
 
     if ($dashboardFiles) {
         $grafanaUrl = "http://$grafanaIp"
-        $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:admin123!"))
+        $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:$GrafanaPassword"))
         $headers = @{
             "Authorization" = "Basic $auth"
             "Content-Type" = "application/json"
@@ -1153,7 +1182,8 @@ if (-not [string]::IsNullOrWhiteSpace($externalIp) -and $externalIp -ne "pending
     if ($grafanaIp) {
         Write-Host "Grafana Dashboard : " -NoNewline -ForegroundColor White
         Write-Host "http://$grafanaIp" -ForegroundColor Green
-        Write-Host "  Username: admin | Password: admin123!" -ForegroundColor Gray
+        Write-Host "  Username: admin | Password: $GrafanaPassword" -ForegroundColor Gray
+        Write-Host "  (Password also stored in Key Vault: $keyVaultName -> grafana-admin-password)" -ForegroundColor DarkGray
     }
 
     Write-Host "`nAccess Details:" -ForegroundColor Yellow
@@ -1173,7 +1203,7 @@ if (-not [string]::IsNullOrWhiteSpace($externalIp) -and $externalIp -ne "pending
     Write-Host "  Ollama API     : http://$ollamaClusterIp:11434 (cluster-internal)" -ForegroundColor White
     Write-Host "  From Pod       : http://ollama.ollama.svc.cluster.local:11434" -ForegroundColor White
     if ($grafanaIp) {
-        Write-Host "  Grafana        : http://$grafanaIp (admin/admin123!)" -ForegroundColor White
+        Write-Host "  Grafana        : http://$grafanaIp (admin/$GrafanaPassword)" -ForegroundColor White
     }
 
     Write-Host "`nStorage Configuration:" -ForegroundColor Yellow
