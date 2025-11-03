@@ -164,13 +164,13 @@
       "pluginVersion": "9.0.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_FB_USED / 1024 / 1024",
-          "legendFormat": "Used: GPU {{gpu}} on {{kubernetes_node}}",
+          "expr": "DCGM_FI_DEV_FB_USED",
+          "legendFormat": "Used: GPU {{gpu}} on {{pod}}",
           "refId": "A"
         },
         {
-          "expr": "DCGM_FI_DEV_FB_FREE / 1024 / 1024",
-          "legendFormat": "Free: GPU {{gpu}} on {{kubernetes_node}}",
+          "expr": "DCGM_FI_DEV_FB_FREE",
+          "legendFormat": "Free: GPU {{gpu}} on {{pod}}",
           "refId": "B"
         }
       ],
@@ -406,7 +406,7 @@
       "pluginVersion": "9.0.0",
       "targets": [
         {
-          "expr": "(DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_TOTAL) * 100",
+          "expr": "(DCGM_FI_DEV_FB_USED / (DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE)) * 100",
           "legendFormat": "GPU {{gpu}}",
           "refId": "A"
         }

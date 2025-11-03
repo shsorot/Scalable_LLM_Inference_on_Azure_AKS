@@ -13,11 +13,11 @@ metadata:
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
-    kind: Deployment
+    kind: StatefulSet
     name: ollama
 
   # Scaling boundaries
-  minReplicas: 2   # Minimum for HA and model diversity
+  minReplicas: 1   # Start with 1, scale up based on load
   maxReplicas: 5   # Limited by GPU node availability (will trigger cluster autoscaler)
 
   # Scaling metrics
