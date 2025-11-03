@@ -160,6 +160,29 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' = {
       upgradeChannel: 'none' // Manual control for demo stability
     }
 
+    // Cluster autoscaler profile - Optimized for fast scale-down
+    autoScalerProfile: {
+      'balance-similar-node-groups': 'false'
+      'daemonset-eviction-for-empty-nodes': true          // Allow DaemonSet eviction for empty nodes
+      'daemonset-eviction-for-occupied-nodes': true       // Allow DaemonSet eviction if needed
+      expander: 'random'
+      'max-empty-bulk-delete': '10'
+      'max-graceful-termination-sec': '600'
+      'max-node-provision-time': '15m'
+      'max-total-unready-percentage': '45'
+      'new-pod-scale-up-delay': '0s'
+      'ok-total-unready-count': '3'
+      'scale-down-delay-after-add': '2m'                  // Fast scale-down after node add (default: 10m)
+      'scale-down-delay-after-delete': '10s'
+      'scale-down-delay-after-failure': '3m'
+      'scale-down-unneeded-time': '2m'                    // Fast detection of unneeded nodes (default: 10m)
+      'scale-down-unready-time': '20m'
+      'scale-down-utilization-threshold': '0.5'
+      'scan-interval': '10s'
+      'skip-nodes-with-local-storage': 'false'
+      'skip-nodes-with-system-pods': 'false'              // Allow scale-down of nodes with system DaemonSets
+    }
+
     // Workload identity for pod-level Azure resource access
     oidcIssuerProfile: {
       enabled: true
