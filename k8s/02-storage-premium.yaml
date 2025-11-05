@@ -1,5 +1,7 @@
 # Azure Files Premium storage for Ollama model storage
+# Use this when deploying with -StorageBackend "AzureFiles" (default)
 # Provides high IOPS for fast model loading and inference
+# Alternative: Use 02-storage-blob-fuse.yaml for Blob Storage backend (87% cost savings)
 ---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass

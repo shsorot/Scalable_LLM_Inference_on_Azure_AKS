@@ -13,11 +13,8 @@ All scripts use a common library (`Common.ps1`) that provides standardized loggi
 | **deploy.ps1** | Full infrastructure deployment | Main deployment script |
 | **cleanup.ps1** | Resource cleanup | Tear down infrastructure |
 | **preload-multi-models.ps1** | Download models | Pre-load LLM models |
-| **set-models-public.ps1** | Make models public | Configure model visibility |
-| **test-scaling.ps1** | Test autoscaling | Validate GPU autoscaling |
 | **verify-deployment-ready.ps1** | Verify deployment | Check deployment status |
 | **verify-gpu-metrics.ps1** | Check GPU metrics | Validate GPU monitoring |
-| **create-policy-exemption.ps1** | Azure Policy exemption | Handle policy constraints |
 
 ## Common Library
 
@@ -147,43 +144,6 @@ if (Test-Prerequisites -Tools @('kubectl', 'az')) {
 
 ---
 
-### set-models-public.ps1
-
-**Purpose:** Make models publicly accessible in Open-WebUI
-
-**Parameters:**
-- `-Namespace` - Kubernetes namespace (default: ollama)
-- `-Models` - Array of model names to make public
-
-**Example:**
-```powershell
-.\scripts\set-models-public.ps1 -Models @("phi3.5", "mistral:7b")
-```
-
----
-
-### test-scaling.ps1
-
-**Purpose:** Test GPU autoscaling behavior
-
-**Parameters:**
-- `-Namespace` - Kubernetes namespace (default: ollama)
-- `-Replicas` - Number of replicas to scale to
-
-**Example:**
-```powershell
-.\scripts\test-scaling.ps1 -Replicas 3
-```
-
-**What it tests:**
-1. Current GPU node count
-2. Scales Ollama deployment
-3. Watches GPU nodes scale up
-4. Monitors pod scheduling
-5. Verifies GPU allocation
-
----
-
 ### verify-deployment-ready.ps1
 
 **Purpose:** Verify deployment is fully operational
@@ -222,21 +182,6 @@ if (Test-Prerequisites -Tools @('kubectl', 'az')) {
 - Prometheus collecting metrics
 - GPU utilization visible
 - GPU memory metrics available
-
----
-
-### create-policy-exemption.ps1
-
-**Purpose:** Create Azure Policy exemptions for deployment
-
-**Parameters:**
-- `-ResourceGroup` - Resource group name
-- `-PolicyName` - Policy to exempt
-
-**Example:**
-```powershell
-.\scripts\create-policy-exemption.ps1 -ResourceGroup "demo-rg" -PolicyName "network-rules"
-```
 
 ---
 

@@ -1,0 +1,59 @@
+# Azure Blob Storage with BlobFuse2 for Ollama model storage
+# Pure streaming mode - models streamed directly from Blob Storage to GPU
+# NO local disk cache required on GPU nodes
+# Use this when deploying with -StorageBackend "BlobStorage"
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: blob-fuse-llm
+  labels:
+    app.kubernetes.io/name: ollama-llm-demo
+    storage-type: blobfuse
+provisioner: blob.csi.azure.com
+allowVolumeExpansion: true
+parameters:
+  skuName: Standard_LRS  # Standard_LRS for cost optimization (87% savings vs Azure Files Premium)
+  protocol: fuse2        # Use BlobFuse2 for better performance
+  # Note: Storage account and container name set via PV volumeAttributes
+volumeBindingMode: Immediate
+mountOptions:
+  # === Hybrid Mode: Cache for Downloads, Stream for Inference ===
+  - --streaming                         # Enable on-demand block streaming from Blob Storage
+
+  # === File Caching (for fast model downloads) ===
+  - --file-cache-timeout=3600           # Cache files for 1 hour (3600s)
+  - --cache-size-mb=51200               # 50GB local cache on node disk
+  # Purpose: Dramatically speeds up model downloads by buffering writes locally
+  # Tradeoff: Requires 50GB disk space on GPU nodes (they have ~300GB available)
+  # After cache timeout: Files stream directly from Blob (no local copy needed)
+
+  # === Metadata Caching (lightweight) ===
+  - --attr-timeout=120                  # Cache file attributes for 2 minutes
+  - --entry-timeout=120                 # Cache directory entries for 2 minutes
+  - --negative-timeout=120              # Cache negative lookups for 2 minutes
+
+  # === Permissions ===
+  - -o allow_other                      # Allow all users to access mount
+  - -o umask=0000                       # Full permissions (0777)
+
+  # === Performance Tuning ===
+  - --max-concurrency=128               # Parallel operations for faster reads
+  - --cancel-list-on-mount-seconds=10   # Cancel slow list operations
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models-pvc
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama
+    app.kubernetes.io/component: storage
+    storage-type: blob
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple Ollama pods can read models simultaneously
+  storageClassName: blob-fuse-llm
+  resources:
+    requests:
+      storage: 1024Gi  # 1TB for multiple LLM models (expandable)

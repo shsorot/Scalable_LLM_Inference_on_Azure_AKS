@@ -87,8 +87,8 @@
       "pluginVersion": "9.0.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_GPU_UTIL{pod=~\"$pod\", Hostname=~\"$node\"}",
-          "legendFormat": "GPU {{gpu}} on {{pod}}",
+          "expr": "DCGM_FI_DEV_GPU_UTIL{Hostname=~\"$node\"}",
+          "legendFormat": "GPU {{gpu}} - {{Hostname}}",
           "refId": "A"
         }
       ],
@@ -164,13 +164,13 @@
       "pluginVersion": "9.0.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_FB_USED{pod=~\"$pod\", Hostname=~\"$node\"}",
-          "legendFormat": "Used: GPU {{gpu}} on {{pod}}",
+          "expr": "DCGM_FI_DEV_FB_USED{Hostname=~\"$node\"}",
+          "legendFormat": "Used: GPU {{gpu}} - {{Hostname}}",
           "refId": "A"
         },
         {
-          "expr": "DCGM_FI_DEV_FB_FREE{pod=~\"$pod\", Hostname=~\"$node\"}",
-          "legendFormat": "Free: GPU {{gpu}} on {{pod}}",
+          "expr": "DCGM_FI_DEV_FB_FREE{Hostname=~\"$node\"}",
+          "legendFormat": "Free: GPU {{gpu}} - {{Hostname}}",
           "refId": "B"
         }
       ],
@@ -225,8 +225,8 @@
       "pluginVersion": "9.0.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_GPU_TEMP{pod=~\"$pod\", Hostname=~\"$node\"}",
-          "legendFormat": "GPU {{gpu}} - {{pod}}",
+          "expr": "DCGM_FI_DEV_GPU_TEMP{Hostname=~\"$node\"}",
+          "legendFormat": "GPU {{gpu}} - {{Hostname}}",
           "refId": "A"
         }
       ],
@@ -281,8 +281,8 @@
       "pluginVersion": "9.0.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_POWER_USAGE{pod=~\"$pod\", Hostname=~\"$node\"}",
-          "legendFormat": "GPU {{gpu}} - {{pod}}",
+          "expr": "DCGM_FI_DEV_POWER_USAGE{Hostname=~\"$node\"}",
+          "legendFormat": "GPU {{gpu}} - {{Hostname}}",
           "refId": "A"
         }
       ],
@@ -406,8 +406,8 @@
       "pluginVersion": "9.0.0",
       "targets": [
         {
-          "expr": "(DCGM_FI_DEV_FB_USED{pod=~\"$pod\", Hostname=~\"$node\"} / (DCGM_FI_DEV_FB_USED{pod=~\"$pod\", Hostname=~\"$node\"} + DCGM_FI_DEV_FB_FREE{pod=~\"$pod\", Hostname=~\"$node\"})) * 100",
-          "legendFormat": "GPU {{gpu}} - {{pod}}",
+          "expr": "(DCGM_FI_DEV_FB_USED{Hostname=~\"$node\"} / (DCGM_FI_DEV_FB_USED{Hostname=~\"$node\"} + DCGM_FI_DEV_FB_FREE{Hostname=~\"$node\"})) * 100",
+          "legendFormat": "GPU {{gpu}} - {{Hostname}}",
           "refId": "A"
         }
       ],
@@ -479,7 +479,7 @@
           "value": "$__all"
         },
         "datasource": "Prometheus",
-        "definition": "label_values(DCGM_FI_DEV_FB_USED, pod)",
+        "definition": "label_values(kube_pod_info{namespace=\"ollama\",pod=~\"ollama-.*\"}, pod)",
         "hide": 0,
         "includeAll": true,
         "label": "Pod",
@@ -487,7 +487,7 @@
         "name": "pod",
         "options": [],
         "query": {
-          "query": "label_values(DCGM_FI_DEV_FB_USED, pod)",
+          "query": "label_values(kube_pod_info{namespace=\"ollama\",pod=~\"ollama-.*\"}, pod)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,

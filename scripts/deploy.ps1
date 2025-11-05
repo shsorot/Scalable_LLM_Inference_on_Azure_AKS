@@ -34,7 +34,11 @@ param(
     [string]$HuggingFaceToken,
 
     [Parameter(Mandatory=$false, HelpMessage="Automatically reuse existing resource group without prompting")]
-    [switch]$AutoApprove
+    [switch]$AutoApprove,
+
+    [Parameter(Mandatory=$false, HelpMessage="Storage backend for LLM models: 'AzureFiles' (fast, expensive) or 'BlobStorage' (streaming, 87% cheaper)")]
+    [ValidateSet('AzureFiles', 'BlobStorage')]
+    [string]$StorageBackend = 'AzureFiles'
 )
 
 # Ensure we're in the correct directory (llm-demo folder)
@@ -208,7 +212,7 @@ Write-Host ""
 az deployment group create `
     --resource-group $ResourceGroupName `
     --template-file $BicepMainFile `
-    --parameters prefix=$Prefix location=$Location huggingFaceToken=$HuggingFaceToken postgresAdminPassword=$PostgresPassword `
+    --parameters prefix=$Prefix location=$Location huggingFaceToken=$HuggingFaceToken postgresAdminPassword=$PostgresPassword storageBackend=$StorageBackend `
     --output table
 
 if ($LASTEXITCODE -ne 0) {
@@ -541,12 +545,26 @@ kubectl create secret generic ollama-secrets `
 Write-Success "Kubernetes secrets created (including PostgreSQL connection)"
 
 Write-Info "Deploying storage classes..."
-kubectl apply -f "$K8sManifestsDir/02-storage-premium.yaml"
-Write-Success "Storage class deployed (Azure Files Premium)"
+if ($StorageBackend -eq 'AzureFiles') {
+    Write-Info "  Using Azure Files Premium for model storage (default)"
+    kubectl apply -f "$K8sManifestsDir/02-storage-premium.yaml"
+    Write-Success "Storage class deployed (Azure Files Premium)"
+} else {
+    Write-Info "  Using Azure Blob Storage with BlobFuse2 for model storage (streaming mode, 87% cheaper)"
+    kubectl apply -f "$K8sManifestsDir/02-storage-blob-fuse.yaml"
+    Write-Success "Storage class deployed (Azure Blob Storage + BlobFuse2)"
+    Write-Info "  Also deploying Azure Files StorageClass for WebUI storage..."
+    kubectl apply -f "$K8sManifestsDir/02-storage-premium.yaml"
+    Write-Success "Azure Files StorageClass deployed for WebUI"
+}
 
 Write-Info "Deploying Persistent Volume Claims..."
-Write-Info "  - Ollama models PVC (Azure Files Premium, 1024GB / 1TB)..."
-Write-Info "  - Open-WebUI data PVC (Azure Files Premium, 20GB)..."
+if ($StorageBackend -eq 'AzureFiles') {
+    Write-Info "  - Ollama models PVC (Azure Files Premium, 1024GB / 1TB)..."
+} else {
+    Write-Info "  - Ollama models PVC (Azure Blob Storage, 1024GB / 1TB, streaming)..."
+}
+Write-Info "  - Open-WebUI data PVC (Azure Files Premium, 20GB - always Azure Files)..."
 kubectl apply -f "$K8sManifestsDir/04-storage-webui-files.yaml"
 Write-Success "PVCs created"
 

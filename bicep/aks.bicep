@@ -24,6 +24,9 @@ param gpuVmSize string
 @description('GPU node count')
 param gpuNodeCount int
 
+@description('Storage backend for LLM model storage')
+param storageBackend string
+
 @description('Resource tags')
 param tags object
 
@@ -129,13 +132,16 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' = {
       }
     }
 
-    // Storage profile - Enable Azure Files CSI driver
+    // Storage profile - Enable CSI drivers based on storageBackend
     storageProfile: {
       diskCSIDriver: {
         enabled: true
       }
       fileCSIDriver: {
-        enabled: true // Critical for Azure Files integration
+        enabled: true // Always enabled (used for WebUI data)
+      }
+      blobCSIDriver: {
+        enabled: storageBackend == 'BlobStorage' // Enable Blob CSI driver when using Blob Storage
       }
       snapshotController: {
         enabled: true

@@ -1,302 +1,691 @@
-# Scalable LLM Inference on Azure AKS
+# Scalable LLM Inference on Azure AKS# Scalable LLM Inference on Azure AKS
 
-**Production-ready deployment of Ollama + Open-WebUI with GPU acceleration, demonstrating horizontal scaling patterns for Large Language Models**
 
-## 🎯 What This Demo Does
 
-This demo deploys a complete, scalable LLM inference platform on Azure Kubernetes Service that solves real-world challenges in running Large Language Models at scale:
+A production-ready deployment pattern for running Large Language Models on Azure Kubernetes Service with GPU acceleration, demonstrating horizontal scaling, shared storage, and vector search capabilities.**Production-ready deployment of Ollama + Open-WebUI with GPU acceleration, demonstrating horizontal scaling patterns for Large Language Models**
 
-### The Problem
-Running LLMs in production requires:
-- **Sharing large model files** (2-40GB each) across multiple pods
-- **GPU acceleration** while keeping costs under control
-- **High availability** with pod mobility across nodes
+
+
+## Overview## 🎯 What This Demo Does
+
+
+
+This project demonstrates how to deploy and scale LLM inference workloads on Azure Kubernetes Service. It addresses common challenges in running large language models at scale:This demo deploys a complete, scalable LLM inference platform on Azure Kubernetes Service that solves real-world challenges in running Large Language Models at scale:
+
+
+
+- **Shared Model Storage**: Multiple pods access the same model files without duplication### The Problem
+
+- **GPU Acceleration**: NVIDIA T4 GPUs for efficient inferenceRunning LLMs in production requires:
+
+- **Horizontal Scaling**: Scale inference capacity without replicating 35GB+ of model data- **Sharing large model files** (2-40GB each) across multiple pods
+
+- **Vector Search**: PostgreSQL with PGVector extension for RAG applications- **GPU acceleration** while keeping costs under control
+
+- **Cost Optimization**: Spot instances and flexible storage options reduce operational costs- **High availability** with pod mobility across nodes
+
 - **Vector search** for RAG (Retrieval Augmented Generation) applications
-- **Horizontal scaling** without duplicating 35GB+ of model weights
 
-### The Solution
-This architecture demonstrates:
-1. **ReadWriteMany Storage** - Multiple pods access the same model files simultaneously
-2. **GPU-Accelerated Inference** - NVIDIA T4 GPUs with Kubernetes scheduling
-3. **Stateful Model Management** - StatefulSet for Ollama with persistent volume claims
-4. **Stateless Web Layer** - Multiple Open-WebUI replicas behind a load balancer
-5. **PostgreSQL + PGVector** - Semantic search for document Q&A with RAG
+### Components- **Horizontal scaling** without duplicating 35GB+ of model weights
+
+
+
+| Component | Purpose | Technology |### The Solution
+
+|-----------|---------|------------|This architecture demonstrates:
+
+| **Ollama** | LLM inference engine | StatefulSet with GPU scheduling |1. **ReadWriteMany Storage** - Multiple pods access the same model files simultaneously
+
+| **Open-WebUI** | Chat interface | Deployment with HPA |2. **GPU-Accelerated Inference** - NVIDIA T4 GPUs with Kubernetes scheduling
+
+| **PostgreSQL + PGVector** | Vector database for RAG | Azure Flexible Server |3. **Stateful Model Management** - StatefulSet for Ollama with persistent volume claims
+
+| **Storage** | Model persistence | Azure Files or Blob Storage (CSI drivers) |4. **Stateless Web Layer** - Multiple Open-WebUI replicas behind a load balancer
+
+| **Monitoring** | Observability | Prometheus + Grafana with GPU metrics |5. **PostgreSQL + PGVector** - Semantic search for document Q&A with RAG
+
 6. **Complete Automation** - Single-command deployment with monitoring included
 
+## Key Features
+
 ### What You Get
-- ✅ **Ollama** inference server (StatefulSet) serving 6 pre-loaded models (~35GB)
-- ✅ **Open-WebUI** chat interface (3 replicas) with document upload and RAG
-- ✅ **PostgreSQL Flexible Server** with PGVector extension for embeddings
-- ✅ **Prometheus + Grafana** monitoring stack with GPU metrics and custom dashboards
-- ✅ **Prometheus Adapter** for GPU-based autoscaling (custom metrics API)
-- ✅ **Azure Key Vault** integration for secure credential management
+
+- **GPU-Accelerated Inference**: NVIDIA T4 GPUs deliver 10-20x faster inference than CPU-only deployments- ✅ **Ollama** inference server (StatefulSet) serving 6 pre-loaded models (~35GB)
+
+- **Automatic Scaling**: Horizontal Pod Autoscaler based on GPU memory utilization- ✅ **Open-WebUI** chat interface (3 replicas) with document upload and RAG
+
+- **Flexible Storage**: Choose between Azure Files Premium (performance) or Blob Storage (cost)- ✅ **PostgreSQL Flexible Server** with PGVector extension for embeddings
+
+- **Vector Search**: Sub-50ms semantic search latency for document Q&A- ✅ **Prometheus + Grafana** monitoring stack with GPU metrics and custom dashboards
+
+- **Multi-Model Support**: Pre-load multiple models with instant access from any pod- ✅ **Prometheus Adapter** for GPU-based autoscaling (custom metrics API)
+
+- **Production Ready**: 99.9% SLA, automated backups, comprehensive monitoring- ✅ **Azure Key Vault** integration for secure credential management
+
 - ✅ **GPU-Based Autoscaling** - HPA with GPU memory utilization metrics
 
+## Prerequisites
+
 ### Key Technologies
-| Component | Purpose | Why This Choice |
+
+### Azure Resources| Component | Purpose | Why This Choice |
+
 |-----------|---------|-----------------|
-| **Ollama** | LLM inference engine | GPU acceleration, model management, OpenAI-compatible API |
-| **Open-WebUI** | User interface | Modern UX, RAG support, multi-user, document processing |
-| **PostgreSQL + PGVector** | Vector database | Sub-50ms semantic search, mature ecosystem, Azure-managed |
-| **Azure Files Premium** | Shared storage | RWX access, 99.9% SLA, pod mobility enablement |
+
+- Azure subscription with Contributor access| **Ollama** | LLM inference engine | GPU acceleration, model management, OpenAI-compatible API |
+
+- Sufficient quota for:| **Open-WebUI** | User interface | Modern UX, RAG support, multi-user, document processing |
+
+  - 2x `Standard_NC4as_T4_v3` GPU nodes (NVIDIA T4)| **PostgreSQL + PGVector** | Vector database | Sub-50ms semantic search, mature ecosystem, Azure-managed |
+
+  - 2x `Standard_D2s_v3` system nodes| **Azure Files Premium** | Shared storage | RWX access, 99.9% SLA, pod mobility enablement |
+
 | **AKS with GPU nodes** | Container orchestration | NVIDIA T4 GPUs, Spot pricing, enterprise-grade K8s |
-| **Prometheus + Grafana** | Observability | GPU metrics, inference monitoring, custom dashboards |
 
-## ✨ Key Features
+### Local Tools| **Prometheus + Grafana** | Observability | GPU metrics, inference monitoring, custom dashboards |
 
-- ✅ **GPU-Accelerated Inference** - NVIDIA T4 GPUs deliver 10-20x faster inference compared to CPU-only deployments
-- ✅ **GPU-Based Autoscaling** - HPA scales Ollama pods based on GPU memory utilization (via Prometheus Adapter + DCGM)
+
+
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) 2.50+## ✨ Key Features
+
+- [kubectl](https://kubernetes.io/docs/tasks/tools/) 1.28+
+
+- PowerShell 5.1+ or PowerShell Core 7+- ✅ **GPU-Accelerated Inference** - NVIDIA T4 GPUs deliver 10-20x faster inference compared to CPU-only deployments
+
+- HuggingFace token (optional, for gated models)- ✅ **GPU-Based Autoscaling** - HPA scales Ollama pods based on GPU memory utilization (via Prometheus Adapter + DCGM)
+
 - ✅ **Vector Database Integration** - PostgreSQL with PGVector enables semantic search with <50ms query latency for RAG applications
-- ✅ **Smart Storage Strategy** - Azure Files Premium with RWX access enables horizontal scaling while maintaining sub-10ms model load latency
+
+## Quick Start- ✅ **Smart Storage Strategy** - Azure Files Premium with RWX access enables horizontal scaling while maintaining sub-10ms model load latency
+
 - ✅ **Horizontal Scaling** - Load balanced across 3 Open-WebUI replicas, scales to N replicas without model duplication
-- ✅ **Multi-Model Support** - Pre-load 6 different LLM models (~35GB total) with instant access from any pod
+
+### 1. Clone Repository- ✅ **Multi-Model Support** - Pre-load 6 different LLM models (~35GB total) with instant access from any pod
+
 - ✅ **Multi-User Ready** - Model access control bypassed, all users can access all models
-- ✅ **Production Ready** - 99.9% SLA, automatic backups, integrated monitoring, and enterprise security with Azure Key Vault
-- ✅ **Cost Optimized** - Spot GPU instances + burstable PostgreSQL = ~$15-25/day (70-90% savings vs. standard pricing)
 
-## 📋 Prerequisites
+```powershell- ✅ **Production Ready** - 99.9% SLA, automatic backups, integrated monitoring, and enterprise security with Azure Key Vault
 
-### Azure Requirements
+git clone https://github.com/shsorot/Scalable_LLM_Inference_on_Azure_AKS.git- ✅ **Cost Optimized** - Spot GPU instances + burstable PostgreSQL = ~$15-25/day (70-90% savings vs. standard pricing)
+
+cd Scalable_LLM_Inference_on_Azure_AKS
+
+```## 📋 Prerequisites
+
+
+
+### 2. Deploy Infrastructure and Applications### Azure Requirements
+
 - **Azure Subscription** with sufficient quota:
-  - 2x `Standard_NC4as_T4_v3` (NVIDIA T4 GPU nodes)
-  - 2x `Standard_D2s_v3` (System nodes)
-- **Subscription Permissions**: Contributor or Owner role
 
-### Local Tools
-- **Azure CLI** - [Install Guide](https://learn.microsoft.com/cli/azure/install-azure-cli)
-- **kubectl** - [Install Guide](https://kubernetes.io/docs/tasks/tools/)
+```powershell  - 2x `Standard_NC4as_T4_v3` (NVIDIA T4 GPU nodes)
+
+.\scripts\deploy.ps1 `  - 2x `Standard_D2s_v3` (System nodes)
+
+    -Prefix "myproject" `- **Subscription Permissions**: Contributor or Owner role
+
+    -Location "northeurope" `
+
+    -HuggingFaceToken "hf_xxx" `### Local Tools
+
+    -AutoApprove- **Azure CLI** - [Install Guide](https://learn.microsoft.com/cli/azure/install-azure-cli)
+
+```- **kubectl** - [Install Guide](https://kubernetes.io/docs/tasks/tools/)
+
 - **PowerShell** - 5.1+ (Windows) or PowerShell Core 7+ (cross-platform)
-- **HuggingFace Token** (optional) - For downloading gated models
 
-### Verify Prerequisites
+**Deployment Time**: ~15-20 minutes- **HuggingFace Token** (optional) - For downloading gated models
 
-```powershell
-# Check Azure CLI
-az version
+
+
+The script deploys:### Verify Prerequisites
+
+- AKS cluster with GPU and system node pools
+
+- PostgreSQL Flexible Server with PGVector extension```powershell
+
+- Ollama inference server (6 pre-loaded models ~35GB)# Check Azure CLI
+
+- Open-WebUI interface (3 replicas)az version
+
+- Prometheus + Grafana monitoring stack
 
 # Check kubectl
-kubectl version --client
 
-# Login to Azure
+### 3. Access Applicationskubectl version --client
+
+
+
+After deployment, you'll receive:# Login to Azure
+
 az login
-az account show
-```
 
-## 🚀 Deployment Guide
+```az account show
 
-### Step 1: Clone and Navigate
+Open-WebUI URL    : http://<public-ip>```
 
-```powershell
+Grafana Dashboard : http://<public-ip>
+
+```## 🚀 Deployment Guide
+
+
+
+**First user to sign up becomes admin.**### Step 1: Clone and Navigate
+
+
+
+## Storage Options```powershell
+
 git clone https://github.com/shsorot/Scalable_LLM_Inference_on_Azure_AKS.git
-cd Scalable_LLM_Inference_on_Azure_AKS
+
+Choose the storage backend that fits your requirements:cd Scalable_LLM_Inference_on_Azure_AKS
+
 ```
+
+### Azure Files Premium (Default)
 
 ### Step 2: Deploy Everything (Single Command)
 
+Best for production workloads requiring fast I/O and frequent model updates.
+
 ```powershell
-.\scripts\deploy.ps1 -Prefix <your-prefix> -Location northeurope -AutoApprove -HuggingFaceToken <optional>
+
+```powershell.\scripts\deploy.ps1 -Prefix <your-prefix> -Location northeurope -AutoApprove -HuggingFaceToken <optional>
+
+.\scripts\deploy.ps1 -Prefix "prod" -StorageBackend "AzureFiles"```
+
 ```
 
 **Parameters:**
-- `-Prefix` - Unique identifier for resources (e.g., `mycompany`)
-- `-Location` - Azure region (e.g., `northeurope`, `eastus`)
-- `-AutoApprove` - Skip manual confirmation prompts
-- `-HuggingFaceToken` - Optional, for gated models like Llama
 
-**What Gets Deployed:**
+**Characteristics:**- `-Prefix` - Unique identifier for resources (e.g., `mycompany`)
 
-| Step | Component | Duration | Details |
+- RWX (ReadWriteMany) access mode- `-Location` - Azure region (e.g., `northeurope`, `eastus`)
+
+- Sub-10ms latency for model loading- `-AutoApprove` - Skip manual confirmation prompts
+
+- Automatic caching and replication- `-HuggingFaceToken` - Optional, for gated models like Llama
+
+- ~$1.74/GB/month ($1,740/TB)- `-StorageBackend` - **NEW!** Storage backend for LLM models: `AzureFiles` (default) or `BlobStorage`
+
+
+
+### Blob Storage### 💾 Storage Backend Options
+
+
+
+Ideal for cost-sensitive environments or dev/test scenarios.Choose between two storage backends for LLM model storage:
+
+
+
+```powershell| Backend | Cold Start | Monthly Cost* | Best For |
+
+.\scripts\deploy.ps1 -Prefix "dev" -StorageBackend "BlobStorage"|---------|------------|---------------|----------|
+
+```| **AzureFiles** (default) | ~5-8s | ~$1,740 | Fast inference, production |
+
+| **BlobStorage** | ~15-30s | ~$227 | Cost-sensitive, dev/test |
+
+**Characteristics:**
+
+- RWX access mode via BlobFuse2***Cost comparison**: 1TB Azure Files Premium ($1.74/GB/month) vs 1TB Blob Storage Hot tier ($0.0227/GB/month) = **87% savings**
+
+- Streaming with 1-hour local cache
+
+- 87% cost savings vs Azure Files**Key Differences:**
+
+- ~$0.0227/GB/month ($227/TB)- **Azure Files Premium** (default):
+
+  - ✅ Fastest cold start (5-8 seconds)
+
+**Note**: Uses hybrid caching (50GB local cache, 1-hour timeout) to accelerate model downloads while maintaining streaming benefits.  - ✅ Local caching on disk
+
+  - ✅ Best for production workloads
+
+See [Storage Backend Selection](docs/STORAGE-BACKEND-SELECTION.md) for detailed comparison.  - ❌ Higher cost (~$1,740/month for 1TB)
+
+
+
+## Architecture- **Blob Storage** (streaming):
+
+  - ✅ 87% cheaper (~$227/month for 1TB)
+
+```  - ✅ Pure streaming from cloud (no local cache)
+
+┌─────────────────────────────────────────────────────────────┐  - ✅ Ideal for dev/test environments
+
+│                      Azure Cloud                            │  - ❌ Slower cold start (15-30 seconds)
+
+│                                                              │  - ⚠️ +12-30s latency on first model load per pod
+
+│  ┌─────────────┐            ┌──────────────┐               │
+
+│  │  Storage    │────────────│  PostgreSQL  │               │**Storage Architecture:**
+
+│  │  (CSI)      │            │  + PGVector  │               │- **Model Storage** (1TB): User-selectable via `-StorageBackend` parameter
+
+│  └──────┬──────┘            └──────┬───────┘               │- **WebUI Data** (20GB): Always uses Azure Files Premium (mixed read/write workload)
+
+│         │                          │                        │
+
+│    ┌────┴──────────────────────────┴──────────────┐        │**Deployment Examples:**
+
+│    │         AKS Cluster (K8s 1.30+)              │        │
+
+│    │                                               │        │```powershell
+
+│    │  [System Pool]        [GPU Pool]             │        │# Default: Azure Files Premium (fast, production-ready)
+
+│    │  - Monitoring         - Ollama (StatefulSet) │        │.\scripts\deploy.ps1 -Prefix "demo" -Location "westus2" -HuggingFaceToken "hf_xxx"
+
+│    │  - Prometheus         - GPU scheduling       │        │
+
+│    │  - Grafana            - Auto-scaling         │        │# Cost-optimized: Blob Storage with streaming (87% cheaper)
+
+│    │                                               │        │.\scripts\deploy.ps1 -Prefix "demo" -Location "westus2" -HuggingFaceToken "hf_xxx" -StorageBackend "BlobStorage"
+
+│    │                       [Web Layer]             │        │```
+
+│    │                       - Open-WebUI (3x)      │        │
+
+│    │                       - LoadBalancer         │        │For detailed cost analysis and migration guide, see:
+
+│    └───────────────────────────────────────────────┘        │- 📄 [Storage Feasibility Analysis](docs/STORAGE-BLOBFUSE-FEASIBILITY.md)
+
+└─────────────────────────────────────────────────────────────┘- 📄 [Implementation Guide](docs/STORAGE-BLOBFUSE-IMPLEMENTATION.md)
+
+```- 📄 [Quick Reference](docs/STORAGE-BLOB-VS-FILES-QUICKREF.md)
+
+
+
+### Design Decisions**What Gets Deployed:**
+
+
+
+**StatefulSet for Ollama**: Provides stable network identity and ordered deployment for GPU workloads. Each pod gets persistent storage via PVC.| Step | Component | Duration | Details |
+
 |------|-----------|----------|---------|
-| 1 | Resource Group | 10s | Creates Azure resource group |
+
+**Deployment for Open-WebUI**: Stateless replicas behind a LoadBalancer enable horizontal scaling and zero-downtime updates.| 1 | Resource Group | 10s | Creates Azure resource group |
+
 | 2 | Key Vault | 30s | Stores PostgreSQL credentials |
-| 3 | Infrastructure | 8-10min | AKS cluster, PostgreSQL, Storage (via Bicep) |
+
+**Node Pool Separation**: System pool (D2s_v3) runs Kubernetes system components and monitoring, while GPU pool (NC4as_T4_v3) is dedicated to LLM inference. This optimizes costs and ensures GPU resources aren't wasted on non-ML workloads.| 3 | Infrastructure | 8-10min | AKS cluster, PostgreSQL, Storage (via Bicep) |
+
 | 4 | Kubernetes Config | 30s | Connects kubectl to AKS |
-| 5 | Applications | 2-3min | Deploys Ollama, Open-WebUI, storage |
+
+**CSI Driver Storage**: Azure Files and Blob Storage CSI drivers automatically manage storage accounts in the AKS-managed resource group, simplifying lifecycle management and RBAC.| 5 | Applications | 2-3min | Deploys Ollama, Open-WebUI, storage |
+
 | 6 | Model Preload | 3-5min | Downloads 6 models (~35GB) |
-| 7 | PostgreSQL Setup | 30s | Enables PGVector extension |
+
+**External PostgreSQL**: Managed service provides automatic backups, HA, and PGVector extension without operational overhead.| 7 | PostgreSQL Setup | 30s | Enables PGVector extension |
+
 | 8 | Monitoring Stack | 2-3min | Prometheus, Grafana, dashboards |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design documentation.
 
 **Total Time:** 15-20 minutes
 
+## Operations
+
 ### Step 3: Access Applications
+
+### Scaling Replicas
 
 After deployment completes, the script shows:
 
-```
-========================================
+```powershell
+
+# Scale Open-WebUI horizontally```
+
+kubectl scale deployment open-webui -n ollama --replicas=5========================================
+
 DEPLOYMENT SUMMARY
-========================================
-Resource Group    : mycompany-rg
-AKS Cluster       : mycompany-aks-...
+
+# Scale Ollama (GPU workload)========================================
+
+kubectl scale statefulset ollama -n ollama --replicas=2Resource Group    : mycompany-rg
+
+```AKS Cluster       : mycompany-aks-...
+
 PostgreSQL Server : mycompany-pg-...
 
+### Monitoring
+
 --- Service Endpoints ---
-Open-WebUI URL    : http://20.54.123.45
+
+Access Grafana dashboard (credentials provided after deployment):Open-WebUI URL    : http://20.54.123.45
+
   └─ First user becomes admin
-  └─ Create account to get started
+
+- **GPU Monitoring**: Utilization, memory, temperature per node  └─ Create account to get started
+
+- **LLM Platform Overview**: Pod status, request rates, latency metrics
 
 Grafana Dashboard : http://20.54.123.67
-  └─ Username: admin
-  └─ Password: <randomly-generated>
-  └─ (also stored in Key Vault: grafana-admin-password)
 
---- Pre-loaded Models (35GB) ---
-✓ phi3.5 (2.3GB)
+```powershell  └─ Username: admin
+
+# Check pod status  └─ Password: <randomly-generated>
+
+kubectl get pods -n ollama  └─ (also stored in Key Vault: grafana-admin-password)
+
+
+
+# View logs--- Pre-loaded Models (35GB) ---
+
+kubectl logs -n ollama -l app=ollama --tail=50✓ phi3.5 (2.3GB)
+
 ✓ llama3.1:8b (4.7GB)
-✓ mistral:7b (4.1GB)
-✓ gemma2:2b (1.6GB)
-✓ gpt-oss (13GB)
+
+# Check GPU allocation✓ mistral:7b (4.1GB)
+
+kubectl describe nodes -l agentpool=gpu✓ gemma2:2b (1.6GB)
+
+```✓ gpt-oss (13GB)
+
 ✓ deepseek-r1 (8GB)
-```
 
-### Step 4: Start Using the Chat Interface
+### Model Management```
 
-1. **Open Web UI** - Navigate to the Open-WebUI URL
-2. **Create Account** - First user becomes admin automatically
-3. **Select Model** - Choose from 6 pre-loaded models
+
+
+Models are stored in `/root/.ollama` within Ollama pods:### Step 4: Start Using the Chat Interface
+
+
+
+```powershell1. **Open Web UI** - Navigate to the Open-WebUI URL
+
+# List loaded models2. **Create Account** - First user becomes admin automatically
+
+kubectl exec -n ollama ollama-0 -- ollama list3. **Select Model** - Choose from 6 pre-loaded models
+
 4. **Start Chatting** - GPU-accelerated inference ready to go
 
-### Step 5: Test RAG (Document Q&A)
+# Pull additional model
 
-1. Click **`+`** icon → **Upload Document** (PDF, TXT, or DOCX)
-2. Wait for document processing (~30s for 10-page PDF)
-3. In chat, ask questions about the document
+kubectl exec -n ollama ollama-0 -- ollama pull llama2:13b### Step 5: Test RAG (Document Q&A)
+
+
+
+# Remove unused model1. Click **`+`** icon → **Upload Document** (PDF, TXT, or DOCX)
+
+kubectl exec -n ollama ollama-0 -- ollama rm <model-name>2. Wait for document processing (~30s for 10-page PDF)
+
+```3. In chat, ask questions about the document
+
 4. System uses PGVector semantic search to retrieve relevant context
+
+### Cleanup
 
 ### Step 6: Monitor Performance
 
-1. **Access Grafana** - Navigate to Grafana URL (use credentials from deployment output)
-2. **Browse Dashboards**:
+```powershell
+
+# Delete all resources1. **Access Grafana** - Navigate to Grafana URL (use credentials from deployment output)
+
+.\scripts\cleanup.ps1 -Prefix "myproject" -Force2. **Browse Dashboards**:
+
    - **GPU Monitoring** - GPU utilization, memory, temperature
-   - **LLM Platform Overview** - Pod status, inference rates, latency
+
+# Keep infrastructure, clean Kubernetes resources only   - **LLM Platform Overview** - Pod status, inference rates, latency
+
+.\scripts\cleanup.ps1 -Prefix "myproject" -KeepResourceGroup
 
 ## 🧹 Cleanup
 
-### Option 1: Delete Everything
+# Wipe database (reset user data)
 
-```powershell
-.\cleanup.ps1 -Prefix <your-prefix> -Force
+.\scripts\cleanup.ps1 -Prefix "myproject" -WipeDatabase -KeepResourceGroup### Option 1: Delete Everything
+
 ```
 
-Removes:
-- Resource group
-- All Azure resources (AKS, PostgreSQL, Storage, Key Vault)
+```powershell
+
+**Cost Saving Tip**: Stop the cluster when not in use:.\cleanup.ps1 -Prefix <your-prefix> -Force
+
+```
+
+```powershell
+
+az aks stop --resource-group myproject-rg --name myproject-aks-<hash>Removes:
+
+az aks start --resource-group myproject-rg --name myproject-aks-<hash>- Resource group
+
+```- All Azure resources (AKS, PostgreSQL, Storage, Key Vault)
+
 - Local kubectl config
+
+## Cost Estimation
 
 ### Option 2: Wipe Database Only
 
+Monthly costs for North Europe region:
+
 ```powershell
-.\cleanup.ps1 -Prefix <your-prefix> -WipeDatabase -KeepResourceGroup
-```
 
-Clears:
-- All chat history
-- Uploaded documents
-- User accounts
-- Vector embeddings
+| Component | SKU | Monthly Cost |.\cleanup.ps1 -Prefix <your-prefix> -WipeDatabase -KeepResourceGroup
 
-Keeps infrastructure running.
+|-----------|-----|--------------|```
+
+| AKS Control Plane | Free tier | $0 |
+
+| System Nodes | 2x Standard_D2s_v3 | ~$140 |Clears:
+
+| GPU Nodes (Spot) | 2x NC4as_T4_v3 | ~$90-120 |- All chat history
+
+| PostgreSQL | B1ms Burstable | ~$15 |- Uploaded documents
+
+| Storage (Azure Files) | 1TB Premium | ~$1,740 |- User accounts
+
+| Storage (Blob) | 1TB Hot | ~$230 |- Vector embeddings
+
+| Key Vault | Standard | ~$1 |
+
+| **Total (Azure Files)** | | **~$1,986-2,016/month** |Keeps infrastructure running.
+
+| **Total (Blob Storage)** | | **~$476-506/month** |
 
 ### Option 3: Keep Everything
 
+**Daily cost for 8-hour workday**: ~$16-25 (with Spot instances)
+
 ```powershell
-# Just stop the cluster to save costs
+
+## RAG (Retrieval Augmented Generation)# Just stop the cluster to save costs
+
 az aks stop --resource-group <prefix>-rg --name <prefix>-aks-...
 
+The platform supports document Q&A via PGVector semantic search:
+
 # Restart later
-az aks start --resource-group <prefix>-rg --name <prefix>-aks-...
-```
 
-## 🏗️ Architecture
+1. Sign in to Open-WebUIaz aks start --resource-group <prefix>-rg --name <prefix>-aks-...
 
-```
+2. Upload documents (PDF, TXT, DOCX) via the `+` menu```
+
+3. Ask questions about the uploaded content
+
+4. The system performs vector similarity search to retrieve relevant context## 🏗️ Architecture
+
+
+
+**Performance**: Sub-50ms semantic search across embedded documents.```
+
 ┌─────────────────────────────────────────────────────────────────┐
-│                         Azure Cloud                              │
-│                                                                   │
-│  ┌─────────────────┐        ┌──────────────────┐                │
-│  │   Azure Files   │◄───────┤  PostgreSQL      │                │
-│  │   Premium 1TB   │        │  Flexible Server │                │
-│  │   (RWX Storage) │        │  + PGVector      │                │
-│  └────────┬────────┘        └────────┬─────────┘                │
-│           │                          │                           │
-│  ┌────────▼─────────────────────────▼──────────────────────┐    │
-│  │              AKS Cluster (K8s 1.30+)                     │    │
-│  │                                                           │    │
-│  │  System Pool (2x D2s_v3)    GPU Pool (2x NC4as_T4_v3)   │    │
-│  │  ┌──────────────────┐       ┌───────────────────────┐   │    │
-│  │  │ Prometheus       │       │ Ollama StatefulSet    │   │    │
-│  │  │ Grafana          │       │ - ollama-0 (GPU)      │   │    │
-│  │  │ Monitoring Stack │       │   (scales to N)       │   │    │
-│  │  └──────────────────┘       └───────────────────────┘   │    │
-│  │                              ┌───────────────────────┐   │    │
-│  │                              │ Open-WebUI Deployment │   │    │
-│  │                              │ - webui-pod-1 (CPU)   │   │    │
-│  │                              │ - webui-pod-2 (CPU)   │   │    │
-│  │                              │ - webui-pod-3 (CPU)   │   │    │
-│  │                              └───────────────────────┘   │    │
-│  └───────────────────────────────────────────────────────────┘   │
-│                                                                   │
-└─────────────────────────────────────────────────────────────────┘
-```
 
-**Key Architectural Decisions:**
-- **StatefulSet for Ollama** - Stable network identity, ordered deployment, persistent volume claims
-- **Deployment for Open-WebUI** - Stateless replicas, rolling updates, horizontal scaling
+## Troubleshooting│                         Azure Cloud                              │
+
+│                                                                   │
+
+### Pods Not Starting│  ┌─────────────────┐        ┌──────────────────┐                │
+
+│  │   Azure Files   │◄───────┤  PostgreSQL      │                │
+
+Check events and describe the pod:│  │   Premium 1TB   │        │  Flexible Server │                │
+
+│  │   (RWX Storage) │        │  + PGVector      │                │
+
+```powershell│  └────────┬────────┘        └────────┬─────────┘                │
+
+kubectl get events -n ollama --sort-by='.lastTimestamp'│           │                          │                           │
+
+kubectl describe pod <pod-name> -n ollama│  ┌────────▼─────────────────────────▼──────────────────────┐    │
+
+```│  │              AKS Cluster (K8s 1.30+)                     │    │
+
+│  │                                                           │    │
+
+### GPU Not Allocated│  │  System Pool (2x D2s_v3)    GPU Pool (2x NC4as_T4_v3)   │    │
+
+│  │  ┌──────────────────┐       ┌───────────────────────┐   │    │
+
+Verify GPU node pool and NVIDIA device plugin:│  │  │ Prometheus       │       │ Ollama StatefulSet    │   │    │
+
+│  │  │ Grafana          │       │ - ollama-0 (GPU)      │   │    │
+
+```powershell│  │  │ Monitoring Stack │       │   (scales to N)       │   │    │
+
+kubectl get nodes -l agentpool=gpu│  │  └──────────────────┘       └───────────────────────┘   │    │
+
+kubectl get pods -n kube-system -l name=nvidia-device-plugin-ds│  │                              ┌───────────────────────┐   │    │
+
+```│  │                              │ Open-WebUI Deployment │   │    │
+
+│  │                              │ - webui-pod-1 (CPU)   │   │    │
+
+### Storage Mount Failures│  │                              │ - webui-pod-2 (CPU)   │   │    │
+
+│  │                              │ - webui-pod-3 (CPU)   │   │    │
+
+Check CSI driver logs:│  │                              └───────────────────────┘   │    │
+
+│  └───────────────────────────────────────────────────────────┘   │
+
+```powershell│                                                                   │
+
+# For Azure Files└─────────────────────────────────────────────────────────────────┘
+
+kubectl logs -n kube-system -l app=csi-azurefile-controller --tail=50```
+
+
+
+# For Blob Storage**Key Architectural Decisions:**
+
+kubectl logs -n kube-system -l app=csi-blob-controller --tail=50- **StatefulSet for Ollama** - Stable network identity, ordered deployment, persistent volume claims
+
+```- **Deployment for Open-WebUI** - Stateless replicas, rolling updates, horizontal scaling
+
 - **External PostgreSQL** - Managed service with automatic backups, HA, and PGVector extension
-- **GPU Taints** - Ensure only GPU-requiring workloads run on expensive GPU nodes
+
+See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING-GPU-WEBUI.md) for more solutions.- **GPU Taints** - Ensure only GPU-requiring workloads run on expensive GPU nodes
+
 - **System/GPU node separation** - Cost optimization (monitoring on cheap nodes, inference on GPU nodes)
+
+## Documentation
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed diagrams and design rationale.
 
-## 💰 Cost Analysis
+- [Architecture Details](ARCHITECTURE.md) - System design and patterns
 
-### Estimated Monthly Costs (North Europe region)
+- [Deployment Guide](DEPLOYMENT.md) - Step-by-step deployment## 💰 Cost Analysis
 
-| Component | SKU/Configuration | Monthly Cost |
+- [Autoscaling](docs/AUTOSCALING.md) - HPA configuration and tuning
+
+- [Monitoring](docs/MONITORING.md) - Prometheus and Grafana setup### Estimated Monthly Costs (North Europe region)
+
+- [Storage Selection](docs/STORAGE-BACKEND-SELECTION.md) - Choosing the right storage
+
+- [Storage Optimization](docs/STORAGE-OPTIMIZATION-SUMMARY.md) - CSI driver management| Component | SKU/Configuration | Monthly Cost |
+
 |-----------|-------------------|--------------|
-| **AKS Control Plane** | Free tier | $0 |
+
+## Project Structure| **AKS Control Plane** | Free tier | $0 |
+
 | **System Nodes** | 2x Standard_D2s_v3 | ~$140 |
-| **GPU Nodes (Spot)** | 2x Standard_NC4as_T4_v3 Spot | ~$90-120 |
-| **PostgreSQL** | Flexible Server B1ms (Burstable) | ~$15 |
-| **Azure Files Premium** | 1TB storage | ~$200 |
-| **Key Vault** | Secrets storage | ~$1 |
-| **Monitoring** | Prometheus storage (20GB) | ~$3 |
-| **Bandwidth** | Outbound data transfer | ~$5-10 |
-| **Total** | | **~$454-489/month** |
 
-**Cost Optimization Tips:**
-- Use **Spot instances** for 70-90% GPU savings (already configured)
-- Enable **AKS cluster autoscaler** to scale down during inactivity
-- Use **Burstable PostgreSQL** tier (B1ms) for demo workloads
-- **Stop cluster** when not in use: `az aks stop` (keeps resources, no compute charges)
+```| **GPU Nodes (Spot)** | 2x Standard_NC4as_T4_v3 Spot | ~$90-120 |
 
-**Daily cost for 8 hours of active use:** ~$15-25 USD
+├── bicep/              # Azure infrastructure (IaC)| **PostgreSQL** | Flexible Server B1ms (Burstable) | ~$15 |
 
-## 📁 Project Structure
+├── k8s/                # Kubernetes manifests| **Azure Files Premium** | 1TB storage | ~$200 |
+
+├── scripts/            # PowerShell deployment automation| **Key Vault** | Secrets storage | ~$1 |
+
+├── dashboards/         # Grafana dashboard definitions| **Monitoring** | Prometheus storage (20GB) | ~$3 |
+
+├── docs/               # Additional documentation| **Bandwidth** | Outbound data transfer | ~$5-10 |
+
+└── ARCHITECTURE.md     # System architecture| **Total** | | **~$454-489/month** |
 
 ```
+
+**Cost Optimization Tips:**
+
+## Contributing- Use **Spot instances** for 70-90% GPU savings (already configured)
+
+- Enable **AKS cluster autoscaler** to scale down during inactivity
+
+Contributions are welcome. Please ensure:- Use **Burstable PostgreSQL** tier (B1ms) for demo workloads
+
+- **Stop cluster** when not in use: `az aks stop` (keeps resources, no compute charges)
+
+- Code follows existing patterns
+
+- PowerShell scripts include error handling**Daily cost for 8 hours of active use:** ~$15-25 USD
+
+- Kubernetes manifests follow best practices
+
+- Documentation is updated accordingly## 📁 Project Structure
+
+
+
+## License```
+
 Scalable_LLM_Inference_on_Azure_AKS/
-├── bicep/                      # Azure infrastructure templates
+
+MIT License - see LICENSE file for details.├── bicep/                      # Azure infrastructure templates
+
 │   ├── main.bicep             # Main orchestration
-│   ├── aks.bicep              # AKS cluster with GPU nodes
+
+## Acknowledgments│   ├── aks.bicep              # AKS cluster with GPU nodes
+
 │   ├── postgres.bicep         # PostgreSQL Flexible Server
-│   └── parameters.example.json
-├── k8s/                       # Kubernetes manifests
-│   ├── 01-namespace.yaml
-│   ├── 01-nvidia-device-plugin.yaml
-│   ├── 02-storage-premium.yaml
-│   ├── 05-ollama-statefulset.yaml
+
+Built with:│   └── parameters.example.json
+
+- [Ollama](https://ollama.ai) - LLM inference runtime├── k8s/                       # Kubernetes manifests
+
+- [Open-WebUI](https://openwebui.com) - Chat interface│   ├── 01-namespace.yaml
+
+- [PGVector](https://github.com/pgvector/pgvector) - Vector similarity search│   ├── 01-nvidia-device-plugin.yaml
+
+- Azure Kubernetes Service│   ├── 02-storage-premium.yaml
+
+- NVIDIA GPU Operator│   ├── 05-ollama-statefulset.yaml
+
 │   ├── 06-ollama-service.yaml
-│   ├── 07-webui-deployment.yaml
+
+## Support│   ├── 07-webui-deployment.yaml
+
 │   ├── 08-webui-service.yaml
-│   ├── 09-resource-quota.yaml
-│   ├── 10-webui-hpa.yaml
-│   ├── 11-dcgm-exporter.yaml
-│   ├── 12-ollama-hpa.yaml
+
+For issues or questions:│   ├── 09-resource-quota.yaml
+
+- Check [documentation](docs/)│   ├── 10-webui-hpa.yaml
+
+- Review [DEPLOYMENT.md](DEPLOYMENT.md)│   ├── 11-dcgm-exporter.yaml
+
+- Open an issue on GitHub│   ├── 12-ollama-hpa.yaml
+
 │   └── 13-dcgm-servicemonitor.yaml
-├── scripts/                   # Deployment automation (see scripts/README.md)
+
+---├── scripts/                   # Deployment automation (see scripts/README.md)
+
 │   ├── Common.ps1             # Shared functions library
-│   ├── deploy.ps1             # Main deployment script
+
+**Note**: This project demonstrates production-ready patterns for LLM deployment on Kubernetes. Adjust configurations based on your specific workload requirements, security policies, and compliance needs.│   ├── deploy.ps1             # Main deployment script
+
 │   ├── cleanup.ps1            # Cleanup script
 │   ├── preload-multi-models.ps1
 │   ├── set-models-public.ps1

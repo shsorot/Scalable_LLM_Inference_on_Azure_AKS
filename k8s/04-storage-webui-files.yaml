@@ -1,6 +1,8 @@
 # Azure Files Premium storage for Open-WebUI data
+# ALWAYS uses Azure Files Premium regardless of -StorageBackend choice
+# Rationale: Mixed read/write workload, small size (20GB), requires RWX access
 # Provides ReadWriteMany (RWX) access for horizontal scaling
-# Stores: embedding models, user uploads, image/audio cache
+# Stores: embedding models, user uploads, image/audio cache, database
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

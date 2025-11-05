@@ -108,13 +108,27 @@ Write-Host ""
 if ($DataOnly) {
     Write-Host "[*] Resetting user data only..." -ForegroundColor Green
 
-    $currentContext = kubectl config current-context 2>$null
-    if (!$?) {
-        Write-Host "  [ERROR] Not connected to Kubernetes cluster" -ForegroundColor Red
+    # Find and connect to the correct AKS cluster
+    $aksClusterName = az aks list --resource-group $resourceGroup --query "[?starts_with(name, '${Prefix}-aks-')].name" -o tsv 2>$null
+
+    if ($aksClusterName) {
+        $aksClusterName = $aksClusterName.Trim()
+        Write-Host "  -> Found AKS cluster: $aksClusterName" -ForegroundColor Gray
+
+        # Get credentials for the correct cluster
+        az aks get-credentials --resource-group $resourceGroup --name $aksClusterName --overwrite-existing 2>&1 | Out-Null
+
+        if (!$?) {
+            Write-Host "  [ERROR] Failed to get credentials for cluster: $aksClusterName" -ForegroundColor Red
+            exit 1
+        }
+
+        $currentContext = kubectl config current-context 2>$null
+        Write-Host "  -> Connected to context: $currentContext" -ForegroundColor Gray
+    } else {
+        Write-Host "  [ERROR] No AKS cluster found with prefix '$Prefix' in resource group '$resourceGroup'" -ForegroundColor Red
         exit 1
     }
-
-    Write-Host "  -> Current context: $currentContext" -ForegroundColor Gray
 
     # Delete WebUI pod (will restart with clean database)
     Write-Host "  -> Restarting WebUI pod (clears in-memory sessions)..." -ForegroundColor Gray
@@ -157,43 +171,59 @@ if ($DataOnly) {
 
 Write-Host "[1/2] Deleting Kubernetes resources..." -ForegroundColor Green
 
-$currentContext = kubectl config current-context 2>$null
-if ($?) {
-    Write-Host "  -> Current context: $currentContext" -ForegroundColor Gray
+# Find the AKS cluster in the resource group that matches our prefix
+$aksClusterName = az aks list --resource-group $resourceGroup --query "[?starts_with(name, '${Prefix}-aks-')].name" -o tsv 2>$null
 
-    $nsCheck = kubectl get namespace $namespace --no-headers 2>$null
+if ($aksClusterName) {
+    $aksClusterName = $aksClusterName.Trim()
+    Write-Host "  -> Found AKS cluster: $aksClusterName" -ForegroundColor Gray
+
+    # Get credentials for the correct cluster
+    Write-Host "  -> Setting kubectl context to cluster: $aksClusterName..." -ForegroundColor Gray
+    az aks get-credentials --resource-group $resourceGroup --name $aksClusterName --overwrite-existing 2>&1 | Out-Null
 
     if ($?) {
-        Write-Host "  -> Deleting namespace '$namespace' (this cascades to all resources)..." -ForegroundColor Gray
-        kubectl delete namespace $namespace --timeout=120s 2>&1 | Out-Null
+        $currentContext = kubectl config current-context 2>$null
+        Write-Host "  -> Connected to context: $currentContext" -ForegroundColor Gray
+
+        $nsCheck = kubectl get namespace $namespace --no-headers 2>$null
 
         if ($?) {
-            Write-Host "  [OK] Namespace deleted" -ForegroundColor Gray
+            Write-Host "  -> Deleting namespace '$namespace' (this cascades to all resources)..." -ForegroundColor Gray
+            kubectl delete namespace $namespace --timeout=120s 2>&1 | Out-Null
+
+            if ($?) {
+                Write-Host "  [OK] Namespace deleted" -ForegroundColor Gray
+            } else {
+                Write-Host "  [WARN] Failed to delete namespace (may require manual cleanup)" -ForegroundColor Yellow
+            }
         } else {
-            Write-Host "  [WARN] Failed to delete namespace (may require manual cleanup)" -ForegroundColor Yellow
+            Write-Host "  [INFO] Namespace '$namespace' not found (already deleted or never created)" -ForegroundColor Gray
         }
     } else {
-        Write-Host "  [INFO] Namespace '$namespace' not found (already deleted or never created)" -ForegroundColor Gray
+        Write-Host "  [ERROR] Failed to get credentials for cluster: $aksClusterName" -ForegroundColor Red
     }
 } else {
-    Write-Host "  [INFO] No kubectl context found (cluster may already be deleted)" -ForegroundColor Gray
+    Write-Host "  [INFO] No AKS cluster found with prefix '$Prefix' in resource group '$resourceGroup'" -ForegroundColor Gray
+    Write-Host "  [INFO] Cluster may already be deleted or never created" -ForegroundColor Gray
 }
 
 # Wipe PostgreSQL database if requested
 if ($WipeDatabase -and $KeepResourceGroup) {
     Write-Host "`n[DATABASE] Wiping PostgreSQL database content..." -ForegroundColor Yellow
 
-    # Get PostgreSQL server name
-    $pgServers = az postgres flexible-server list --resource-group $resourceGroup --query "[].name" -o tsv 2>$null
+    # Get PostgreSQL server name (filter by prefix pattern)
+    $pgServerName = az postgres flexible-server list --resource-group $resourceGroup --query "[?starts_with(name, '${Prefix}-pg-')].name" -o tsv 2>$null
 
-    if ($pgServers) {
-        $pgServerName = $pgServers.Split("`n")[0].Trim()
+    if ($pgServerName) {
+        $pgServerName = $pgServerName.Trim()
         Write-Host "  -> Found PostgreSQL server: $pgServerName" -ForegroundColor Gray
 
-        # Get admin password from Key Vault
-        $kvNames = az keyvault list --resource-group $resourceGroup --query "[].name" -o tsv 2>$null
-        if ($kvNames) {
-            $kvName = $kvNames.Split("`n")[0].Trim()
+        # Get admin password from Key Vault (filter by prefix pattern)
+        $kvName = az keyvault list --resource-group $resourceGroup --query "[?starts_with(name, '${Prefix}kv')].name" -o tsv 2>$null
+        if ($kvName) {
+            $kvName = $kvName.Trim()
+            Write-Host "  -> Found Key Vault: $kvName" -ForegroundColor Gray
             Write-Host "  -> Retrieving admin password from Key Vault..." -ForegroundColor Gray
 
             $pgPassword = az keyvault secret show --vault-name $kvName --name postgres-admin-password --query value -o tsv 2>$null

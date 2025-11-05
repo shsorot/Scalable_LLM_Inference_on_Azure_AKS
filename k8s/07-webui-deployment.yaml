@@ -55,6 +55,13 @@ spec:
           env:
             - name: OLLAMA_BASE_URL
               value: "http://ollama.ollama.svc.cluster.local:11434"
+
+            # Fix streaming issue - ensure responses are streamed properly
+            - name: ENABLE_OLLAMA_API
+              value: "True"
+            - name: OLLAMA_API_BASE_URL
+              value: "http://ollama.ollama.svc.cluster.local:11434/api"
+
             - name: WEBUI_AUTH
               value: "True"  # Enable authentication
             - name: WEBUI_NAME

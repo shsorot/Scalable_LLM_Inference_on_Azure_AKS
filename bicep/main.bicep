@@ -41,6 +41,13 @@ param postgresAdminPassword string
 @description('Kubernetes version')
 param kubernetesVersion string = '1.31'
 
+@description('Storage backend for LLM model storage')
+@allowed([
+  'AzureFiles'    // Azure Files Premium (default) - low latency, proven
+  'BlobStorage'   // Azure Blob Storage - cost-optimized (87% savings), streaming
+])
+param storageBackend string = 'AzureFiles'
+
 @description('Tags for all resources')
 param tags object = {
   Project: 'KubeCon-NA-2025'
@@ -137,6 +144,25 @@ resource kvSecretUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
+// === Storage Accounts ===
+// NOTE: Storage accounts for Azure Files and Blob Storage are automatically created
+// and managed by the respective CSI drivers when PVCs are provisioned.
+// They are created in the AKS-managed resource group (MC_*).
+//
+// This is the recommended approach per Microsoft documentation:
+// - Azure Files CSI: https://learn.microsoft.com/en-us/azure/aks/azure-files-csi
+// - Azure Blob CSI: https://learn.microsoft.com/en-us/azure/aks/azure-blob-csi
+//
+// Benefits:
+// - Automatic lifecycle management (creation, deletion)
+// - Automatic RBAC configuration (AKS manages permissions)
+// - No orphaned resources when cluster is deleted
+// - Simplified deployment
+//
+// Storage account naming by CSI drivers:
+// - Azure Files: fd<uniqueString> (FileStorage, Premium_LRS or Standard_LRS)
+// - Azure Blob: fuse<uniqueString> (StorageV2, Standard_LRS)
+
 // === AKS Cluster ===
 module aks 'aks.bicep' = {
   name: 'aks-deployment'
@@ -148,6 +174,7 @@ module aks 'aks.bicep' = {
     logAnalyticsId: logAnalytics.id
     gpuVmSize: gpuVmSize
     gpuNodeCount: gpuNodeCount
+    storageBackend: storageBackend
     tags: tags
   }
   dependsOn: [
@@ -177,8 +204,11 @@ output keyVaultId string = keyVault.id
 output logAnalyticsWorkspaceId string = logAnalytics.id
 output managedIdentityClientId string = aksIdentity.properties.clientId
 output managedIdentityPrincipalId string = aksIdentity.properties.principalId
-output premiumStorageAccountName string = ''  // Not deployed in this version
-output standardStorageAccountName string = ''  // Not deployed in this version
+output storageBackend string = storageBackend
+output blobStorageAccountName string = ''  // CSI driver auto-creates storage accounts in MC_ resource group
+output blobStorageAccountId string = ''  // CSI driver auto-creates storage accounts in MC_ resource group
+output premiumStorageAccountName string = ''  // CSI driver auto-creates storage accounts in MC_ resource group
+output standardStorageAccountName string = ''  // CSI driver auto-creates storage accounts in MC_ resource group
 output postgresServerName string = postgres.outputs.postgresServerName
 output postgresServerFqdn string = postgres.outputs.postgresServerFqdn
 output postgresAdminUsername string = postgres.outputs.postgresAdminUsername
