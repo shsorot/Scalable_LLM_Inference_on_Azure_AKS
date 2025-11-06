@@ -62,6 +62,18 @@ spec:
             - name: OLLAMA_API_BASE_URL
               value: "http://ollama.ollama.svc.cluster.local:11434/api"
 
+            # Critical: Increase timeout for large model responses (30 minutes)
+            - name: AIOHTTP_CLIENT_TIMEOUT
+              value: "1800"
+
+            # Force streaming mode to prevent buffering
+            - name: STREAMING_ENABLED
+              value: "true"
+
+            # Prevent response buffering for large models
+            - name: DISABLE_RESPONSE_BUFFERING
+              value: "true"
+
             - name: WEBUI_AUTH
               value: "True"  # Enable authentication
             - name: WEBUI_NAME

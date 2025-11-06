@@ -46,10 +46,24 @@ spec:
                     values:
                       - llm
 
+      # Security context for GPU access
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
+
       containers:
         - name: ollama
           image: ollama/ollama:latest
           imagePullPolicy: Always
+
+          # Security context for GPU device access
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: true
+            capabilities:
+              add:
+                - SYS_ADMIN
 
           ports:
             - name: http

@@ -10,6 +10,11 @@ metadata:
     app: open-webui
     app.kubernetes.io/name: open-webui
     app.kubernetes.io/component: web-frontend
+  annotations:
+    # Increase idle timeout to 30 minutes for long-running LLM responses
+    service.beta.kubernetes.io/azure-load-balancer-tcp-idle-timeout: "30"
+    # Disable connection draining to prevent streaming interruption
+    service.beta.kubernetes.io/azure-load-balancer-disable-tcp-reset: "true"
 spec:
   type: LoadBalancer
   selector:
