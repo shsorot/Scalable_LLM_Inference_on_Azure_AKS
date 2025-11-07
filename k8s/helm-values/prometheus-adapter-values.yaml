@@ -1,0 +1,38 @@
+# Prometheus Adapter Helm Values
+# Custom metrics API for GPU-based Horizontal Pod Autoscaling
+---
+# Tolerations to run on system nodes
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+# Custom metrics rules for GPU utilization
+rules:
+  custom:
+  # GPU utilization metric for HPA
+  - seriesQuery: 'DCGM_FI_DEV_GPU_UTIL'
+    resources:
+      overrides:
+        exported_namespace: {resource: "namespace"}
+        pod: {resource: "pod"}
+    name:
+      matches: "^(.*)$"
+      as: "gpu_utilization"
+    metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+  # GPU memory utilization metric
+  - seriesQuery: 'DCGM_FI_DEV_FB_USED'
+    resources:
+      overrides:
+        exported_namespace: {resource: "namespace"}
+        pod: {resource: "pod"}
+    name:
+      matches: "^(.*)$"
+      as: "gpu_memory_used_bytes"
+    metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+prometheus:
+  url: http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local
+  port: 9090

@@ -1,0 +1,68 @@
+# Prometheus + Grafana Stack Values with Persistence and Dashboards
+defaultTolerations: &commonTolerations
+  - key: CriticalAddonsOnly
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+prometheusOperator:
+  tolerations: *commonTolerations
+  admissionWebhooks:
+    patch:
+      tolerations: *commonTolerations
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    retention: 7d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+    tolerations: *commonTolerations
+
+grafana:
+  service:
+    type: LoadBalancer
+  tolerations: *commonTolerations
+
+  # Persistent storage for dashboards and settings using Azure Files
+  persistence:
+    enabled: true
+    type: pvc
+    accessModes:
+      - ReadWriteMany  # Azure Files supports multiple pod access
+    size: 10Gi
+    storageClassName: azurefile-premium-llm  # Same storage class as Open-WebUI
+
+  # Dashboard provisioning from ConfigMaps
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+      - name: 'default'
+        orgId: 1
+        folder: 'AKS LLM Platform'
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+
+  # Mount dashboards from ConfigMap
+  dashboardsConfigMaps:
+    default: grafana-dashboards
+
+alertmanager:
+  alertmanagerSpec:
+    tolerations: *commonTolerations
+
+kube-state-metrics:
+  tolerations: *commonTolerations
+
+prometheus-node-exporter:
+  tolerations:
+    - operator: Exists
