@@ -441,6 +441,71 @@ Write-Success "Connected to AKS cluster"
 $nodeList = kubectl get nodes --no-headers
 Write-Info "Nodes:`n$nodeList"
 
+Write-StepHeader "Verifying CSI Drivers Readiness"
+
+Write-Info "Waiting for Azure Files CSI driver to be ready..."
+$maxWaitSeconds = 120
+$elapsedSeconds = 0
+$filesCSIReady = $false
+
+while ($elapsedSeconds -lt $maxWaitSeconds) {
+    $csiFilePods = kubectl get pods -n kube-system -l app=csi-azurefile-controller -o jsonpath='{.items[*].status.phase}' 2>$null
+    if ($csiFilePods -match "Running") {
+        $filesCSIReady = $true
+        Write-Success "Azure Files CSI driver is ready"
+        break
+    }
+    Write-Host "  Waiting for Azure Files CSI driver... ($elapsedSeconds/$maxWaitSeconds seconds)" -ForegroundColor Gray
+    Start-Sleep -Seconds 5
+    $elapsedSeconds += 5
+}
+
+if (-not $filesCSIReady) {
+    Write-Warning "Azure Files CSI driver not ready within timeout, but continuing..."
+}
+
+if ($StorageBackend -eq 'BlobStorage') {
+    Write-Info "Waiting for Azure Blob CSI driver to be ready..."
+    $elapsedSeconds = 0
+    $blobCSIReady = $false
+
+    while ($elapsedSeconds -lt $maxWaitSeconds) {
+        $csiBlobPods = kubectl get pods -n kube-system -l app=csi-blob-controller -o jsonpath='{.items[*].status.phase}' 2>$null
+        if ($csiBlobPods -match "Running") {
+            $blobCSIReady = $true
+            Write-Success "Azure Blob CSI driver is ready"
+            break
+        }
+        Write-Host "  Waiting for Azure Blob CSI driver... ($elapsedSeconds/$maxWaitSeconds seconds)" -ForegroundColor Gray
+        Start-Sleep -Seconds 5
+        $elapsedSeconds += 5
+    }
+
+    if (-not $blobCSIReady) {
+        Write-Warning "Azure Blob CSI driver not ready within timeout, but continuing..."
+    }
+}
+
+Write-Info "Waiting for Azure Key Vault Secrets Store CSI driver to be ready..."
+$elapsedSeconds = 0
+$kvCSIReady = $false
+
+while ($elapsedSeconds -lt $maxWaitSeconds) {
+    $csiSecretsPods = kubectl get pods -n kube-system -l app.kubernetes.io/name=secrets-store-csi-driver -o jsonpath='{.items[*].status.phase}' 2>$null
+    if ($csiSecretsPods -match "Running") {
+        $kvCSIReady = $true
+        Write-Success "Key Vault Secrets Store CSI driver is ready"
+        break
+    }
+    Write-Host "  Waiting for Secrets Store CSI driver... ($elapsedSeconds/$maxWaitSeconds seconds)" -ForegroundColor Gray
+    Start-Sleep -Seconds 5
+    $elapsedSeconds += 5
+}
+
+if (-not $kvCSIReady) {
+    Write-Warning "Secrets Store CSI driver not ready within timeout, but continuing..."
+}
+
 Write-StepHeader "Installing NVIDIA GPU Support"
 
 Write-Info "Installing NVIDIA device plugin..."
@@ -499,6 +564,27 @@ $totalGpus = kubectl get nodes -l workload=llm -o json | ConvertFrom-Json |
 
 Write-Info "Total GPUs available in cluster: $totalGpus"
 
+Write-Info "Deploying GPU monitoring (DCGM Exporter)..."
+if (Test-Path "$K8sManifestsDir/11-dcgm-exporter.yaml") {
+    kubectl apply -f "$K8sManifestsDir/11-dcgm-exporter.yaml"
+    Write-Success "DCGM Exporter deployed for GPU metrics"
+
+    Write-Info "Waiting for DCGM Exporter to be ready..."
+    $maxWait = 60
+    $elapsed = 0
+    while ($elapsed -lt $maxWait) {
+        $dcgmReady = kubectl get pods -n ollama -l app.kubernetes.io/name=dcgm-exporter -o jsonpath='{.items[*].status.phase}' 2>$null
+        if ($dcgmReady -match "Running") {
+            Write-Success "DCGM Exporter is ready"
+            break
+        }
+        Start-Sleep -Seconds 5
+        $elapsed += 5
+    }
+} else {
+    Write-Warning "DCGM Exporter manifest not found, skipping GPU metrics deployment"
+}
+
 Write-StepHeader "Deploying Kubernetes Resources"
 
 Write-Info "Applying resource quota..."
@@ -508,6 +594,16 @@ Write-Success "Resource quota applied"
 Write-Info "Creating Ollama namespace..."
 kubectl apply -f "$K8sManifestsDir/01-namespace.yaml"
 Write-Success "Ollama namespace created"
+
+Write-Info "Deploying Azure Key Vault SecretProviderClass..."
+$tenantId = az account show --query tenantId -o tsv
+$secretProviderManifest = Get-Content "$K8sManifestsDir/03-keyvault-secret-provider.yaml" -Raw
+$secretProviderManifest = $secretProviderManifest -replace 'KEYVAULT_NAME', $keyVaultName -replace 'TENANT_ID', $tenantId
+$tempSecretProviderFile = Join-Path $env:TEMP "keyvault-secret-provider.yaml"
+Set-Content -Path $tempSecretProviderFile -Value $secretProviderManifest
+kubectl apply -f $tempSecretProviderFile | Out-Null
+Remove-Item $tempSecretProviderFile -ErrorAction SilentlyContinue
+Write-Success "SecretProviderClass created for Key Vault access"
 
 # Storage account keys are only needed if using standalone storage accounts
 if ($premiumStorageAccountName -and $standardStorageAccountName) {
@@ -616,73 +712,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Success "Ollama pod ready"
 
-Write-Info "Deploying Open-WebUI (with Azure Files Premium + PostgreSQL backend)..."
-kubectl apply -f "$K8sManifestsDir/07-webui-deployment.yaml"
-kubectl apply -f "$K8sManifestsDir/08-webui-service.yaml"
-Write-Success "Open-WebUI deployed"
-
-# Deploy autoscaling components
-Write-Info "Deploying Horizontal Pod Autoscalers..."
-if (Test-Path "$K8sManifestsDir/10-webui-hpa.yaml") {
-    kubectl apply -f "$K8sManifestsDir/10-webui-hpa.yaml"
-    Write-Success "Open-WebUI HPA deployed"
-}
-if (Test-Path "$K8sManifestsDir/12-ollama-hpa.yaml") {
-    kubectl apply -f "$K8sManifestsDir/12-ollama-hpa.yaml"
-    Write-Success "Ollama HPA deployed"
-}
-
-Write-Info "Deploying GPU monitoring (DCGM Exporter)..."
-if (Test-Path "$K8sManifestsDir/11-dcgm-exporter.yaml") {
-    kubectl apply -f "$K8sManifestsDir/11-dcgm-exporter.yaml"
-    Write-Success "DCGM Exporter deployed for GPU metrics"
-}
-
-Write-Info "Waiting for Open-WebUI pod to be ready (max 5 minutes)..."
-Write-Info "Note: First startup may take 2-3 minutes to download embedding model..."
-kubectl wait --for=condition=ready pod -l app=open-webui -n ollama --timeout=300s
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Open-WebUI pods not ready yet (may need PGVector extensions)"
-    Write-Info "Will enable PGVector extensions in next step..."
-} else {
-    Write-Success "Open-WebUI pods ready"
-}
-
-Write-StepHeader "Pre-Loading Multiple Models"
-
-$MultiModelScript = Join-Path $ScriptRoot "preload-multi-models.ps1"
-if (Test-Path $MultiModelScript) {
-    Write-Info "Running multi-model pre-load script..."
-    Write-Info "This will download 6 models (~33.7 GB total):"
-    Write-Info "  - phi3.5 (2.3 GB)"
-    Write-Info "  - llama3.1:8b (4.7 GB)"
-    Write-Info "  - mistral:7b (4.1 GB)"
-    Write-Info "  - gemma2:2b (1.6 GB)"
-    Write-Info "  - gpt-oss (13 GB)"
-    Write-Info "  - deepseek-r1 (8 GB)"
-    & $MultiModelScript -Namespace "ollama"
-    if ($LASTEXITCODE -ne 0) {
-        Write-ErrorMsg "Multi-model pre-load failed"
-        exit 1
-    }
-    Write-Success "Models pre-loaded successfully"
-} else {
-    Write-Info "Multi-model script not found, falling back to single model..."
-    if (Test-Path $PreloadScript) {
-        & $PreloadScript -ModelName "llama3.1:8b" -Namespace "ollama"
-        if ($LASTEXITCODE -ne 0) {
-            Write-ErrorMsg "Model pre-load failed"
-            exit 1
-        }
-        Write-Success "Model pre-loaded successfully"
-    } else {
-        Write-Info "No pre-load scripts found, skipping model pre-load"
-    }
-}
-
-# ================================================================================
-# Step 7: Enable PGVector Extensions
-# ================================================================================
 Write-StepHeader "Enabling PGVector Extensions"
 
 Write-Info "Retrieving PostgreSQL server details..."
@@ -714,7 +743,8 @@ if ([string]::IsNullOrWhiteSpace($pgPassword)) {
     Write-Warning "Could not retrieve PostgreSQL password from Key Vault"
     Write-Info "You may need to create PGVector extension manually"
 } else {
-    Write-Info "Creating pgvector extension in $postgresDatabaseName database..."    # Create temporary pod manifest
+    Write-Info "Creating pgvector extension in $postgresDatabaseName database..."
+    # Create temporary pod manifest
     $podManifest = @"
 apiVersion: v1
 kind: Pod
@@ -801,6 +831,64 @@ spec:
     }
 }
 
+Write-Info "Deploying Open-WebUI (with Azure Files Premium + PostgreSQL backend)..."
+kubectl apply -f "$K8sManifestsDir/07-webui-deployment.yaml"
+kubectl apply -f "$K8sManifestsDir/08-webui-service.yaml"
+Write-Success "Open-WebUI deployed"
+
+# Deploy autoscaling components
+Write-Info "Deploying Horizontal Pod Autoscalers..."
+if (Test-Path "$K8sManifestsDir/10-webui-hpa.yaml") {
+    kubectl apply -f "$K8sManifestsDir/10-webui-hpa.yaml"
+    Write-Success "Open-WebUI HPA deployed"
+}
+if (Test-Path "$K8sManifestsDir/12-ollama-hpa.yaml") {
+    kubectl apply -f "$K8sManifestsDir/12-ollama-hpa.yaml"
+    Write-Success "Ollama HPA deployed"
+}
+
+Write-Info "Waiting for Open-WebUI pod to be ready (max 5 minutes)..."
+Write-Info "Note: First startup may take 2-3 minutes to download embedding model..."
+kubectl wait --for=condition=ready pod -l app=open-webui -n ollama --timeout=300s
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Open-WebUI pods not ready yet, but continuing..."
+    Write-Info "Pods may still be initializing, check with: kubectl get pods -n ollama"
+} else {
+    Write-Success "Open-WebUI pods ready"
+}
+
+Write-StepHeader "Pre-Loading Multiple Models"
+
+$MultiModelScript = Join-Path $ScriptRoot "preload-multi-models.ps1"
+if (Test-Path $MultiModelScript) {
+    Write-Info "Running multi-model pre-load script..."
+    Write-Info "This will download 6 models (~33.7 GB total):"
+    Write-Info "  - phi3.5 (2.3 GB)"
+    Write-Info "  - llama3.1:8b (4.7 GB)"
+    Write-Info "  - mistral:7b (4.1 GB)"
+    Write-Info "  - gemma2:2b (1.6 GB)"
+    Write-Info "  - gpt-oss (13 GB)"
+    Write-Info "  - deepseek-r1 (8 GB)"
+    & $MultiModelScript -Namespace "ollama"
+    if ($LASTEXITCODE -ne 0) {
+        Write-ErrorMsg "Multi-model pre-load failed"
+        exit 1
+    }
+    Write-Success "Models pre-loaded successfully"
+} else {
+    Write-Info "Multi-model script not found, falling back to single model..."
+    if (Test-Path $PreloadScript) {
+        & $PreloadScript -ModelName "llama3.1:8b" -Namespace "ollama"
+        if ($LASTEXITCODE -ne 0) {
+            Write-ErrorMsg "Model pre-load failed"
+            exit 1
+        }
+        Write-Success "Model pre-loaded successfully"
+    } else {
+        Write-Info "No pre-load scripts found, skipping model pre-load"
+    }
+}
+
 # Step 8: Deploy Monitoring Stack (Prometheus + Grafana)
 # ================================================================================
 Write-StepHeader "Deploying Monitoring Stack (Prometheus + Grafana)"
@@ -865,6 +953,13 @@ grafana:
   adminPassword: $GrafanaPassword
   service:
     type: LoadBalancer
+  persistence:
+    enabled: true
+    type: pvc
+    storageClassName: azurefile-premium-llm
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
   tolerations: *commonTolerations
 
 alertmanager:
@@ -1048,6 +1143,28 @@ if ($adapterSuccess) {
 # Wait for Prometheus Adapter to be ready
 Write-Info "Waiting for Prometheus Adapter to be ready..."
 Start-Sleep -Seconds 10
+
+# Wait for Prometheus Operator CRDs to be established
+Write-Info "Verifying ServiceMonitor CRD is ready..."
+$maxWait = 60
+$elapsed = 0
+$crdReady = $false
+
+while ($elapsed -lt $maxWait) {
+    $crdStatus = kubectl get crd servicemonitors.monitoring.coreos.com -o jsonpath='{.status.conditions[?(@.type=="Established")].status}' 2>$null
+    if ($crdStatus -eq "True") {
+        $crdReady = $true
+        Write-Success "ServiceMonitor CRD is ready"
+        break
+    }
+    Write-Host "  Waiting for ServiceMonitor CRD... ($elapsed/$maxWait seconds)" -ForegroundColor Gray
+    Start-Sleep -Seconds 5
+    $elapsed += 5
+}
+
+if (-not $crdReady) {
+    Write-Warning "ServiceMonitor CRD not ready, but continuing..."
+}
 
 # Create ServiceMonitors for GPU and application metrics
 Write-Info "Creating ServiceMonitors for metrics collection..."
