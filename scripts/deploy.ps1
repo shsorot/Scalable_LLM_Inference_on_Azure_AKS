@@ -893,129 +893,29 @@ if (Test-Path $MultiModelScript) {
 # ================================================================================
 Write-StepHeader "Deploying Monitoring Stack (Prometheus + Grafana)"
 
-Write-Info "Checking if monitoring namespace exists..."
-# Check if namespace exists without showing error
-$existingNs = kubectl get namespaces -o json 2>$null | ConvertFrom-Json
-$monitoringExists = $existingNs.items | Where-Object { $_.metadata.name -eq "monitoring" }
+# Step 8.1: Create Grafana database in PostgreSQL
+# ================================================================================
+Write-Info "Creating Grafana database in PostgreSQL..."
 
-if ($monitoringExists) {
-    Write-Success "Namespace 'monitoring' already exists"
-} else {
-    Write-Info "Creating monitoring namespace..."
-    kubectl create namespace monitoring 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Success "Namespace 'monitoring' created"
-    } else {
-        Write-ErrorMsg "Failed to create monitoring namespace"
-        exit 1
-    }
-}
+& "$PSScriptRoot\setup-grafana-database.ps1" `
+    -KeyVaultName $keyVaultName `
+    -PostgresServerFqdn $postgresServerFqdn `
+    -PostgresAdminUsername $postgresAdminUsername
 
-# Check if Helm repo is added
-Write-Info "Adding Prometheus Helm repository..."
-$helmRepoAdd = helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>&1
-if ($LASTEXITCODE -ne 0 -and $helmRepoAdd -notlike "*already exists*") {
-    Write-Warning "Helm repo add had issues, but continuing..."
-}
-$helmRepoUpdate = helm repo update 2>&1 | Out-Null
-Write-Success "Helm repository updated"
+# Step 8.2: Deploy Monitoring Stack
+# ================================================================================
 
-# Create monitoring values file with tolerations
-$monitoringValuesFile = Join-Path $env:TEMP "monitoring-values.yaml"
-$monitoringValues = @"
-# Prometheus + Grafana Stack Values with Tolerations
-defaultTolerations: &commonTolerations
-  - key: CriticalAddonsOnly
-    operator: Equal
-    value: "true"
-    effect: NoSchedule
+$grafanaPassword = az keyvault secret show --vault-name $keyVaultName --name grafana-admin-password --query value -o tsv 2>$null
+$postgresPassword = az keyvault secret show --vault-name $keyVaultName --name postgres-admin-password --query value -o tsv 2>$null
 
-prometheusOperator:
-  tolerations: *commonTolerations
-  admissionWebhooks:
-    patch:
-      tolerations: *commonTolerations
+$deploymentResult = & "$PSScriptRoot\deploy-monitoring-stack.ps1" `
+    -GrafanaPassword $grafanaPassword `
+    -PostgresPassword $postgresPassword `
+    -PostgresServerFqdn $postgresServerFqdn `
+    -PostgresAdminUsername $postgresAdminUsername
 
-prometheus:
-  prometheusSpec:
-    serviceMonitorSelectorNilUsesHelmValues: false
-    retention: 7d
-    storageSpec:
-      volumeClaimTemplate:
-        spec:
-          accessModes: ["ReadWriteOnce"]
-          resources:
-            requests:
-              storage: 20Gi
-    tolerations: *commonTolerations
-
-grafana:
-  adminPassword: $GrafanaPassword
-  service:
-    type: LoadBalancer
-  persistence:
-    enabled: true
-    type: pvc
-    storageClassName: azurefile-premium-llm
-    accessModes:
-      - ReadWriteOnce
-    size: 10Gi
-  tolerations: *commonTolerations
-
-alertmanager:
-  alertmanagerSpec:
-    tolerations: *commonTolerations
-
-kube-state-metrics:
-  tolerations: *commonTolerations
-
-prometheus-node-exporter:
-  tolerations:
-    - operator: Exists
-"@
-
-Set-Content -Path $monitoringValuesFile -Value $monitoringValues
-
-Write-Info "Installing kube-prometheus-stack (this may take 2-3 minutes)..."
-$ErrorActionPreference = 'Continue'
-$helmOutput = helm install monitoring prometheus-community/kube-prometheus-stack `
-    --namespace monitoring `
-    -f $monitoringValuesFile `
-    --wait `
-    --timeout 5m 2>&1
-$helmExitCode = $LASTEXITCODE
-$ErrorActionPreference = 'Stop'
-
-# Check for Azure Policy warnings in output (informational only)
-$policyWarnings = $helmOutput | Select-String -Pattern "azurepolicy.*has not been allowed"
-if ($policyWarnings) {
-    Write-Info "Note: Azure Policy warnings detected (audit mode, not blocking deployment):"
-    $policyWarnings | ForEach-Object {
-        $line = $_.Line
-        # Extract image name from warning
-        if ($line -match "Container image ([^\s]+)") {
-            Write-Info "  - Image: $($matches[1])"
-        }
-    }
-    Write-Info "These warnings are from Azure Policy in audit/warn mode and do not affect deployment."
-}
-
-# Verify actual deployment by checking Helm release status
-$helmStatus = helm list -n monitoring -o json 2>$null | ConvertFrom-Json
-$deploymentSuccess = $helmStatus | Where-Object { $_.name -eq "monitoring" -and $_.status -eq "deployed" }
-
-if ($deploymentSuccess) {
-    Write-Success "Monitoring stack deployed successfully"
-    if ($policyWarnings) {
-        Write-Info "To resolve policy warnings, you can either:"
-        Write-Info "  1. Use mirrored images from Azure Container Registry (ACR)"
-        Write-Info "  2. Request Azure Policy exemption using: .\scripts\create-policy-exemption.ps1"
-    }
-} else {
+if (-not $deploymentResult) {
     Write-ErrorMsg "Monitoring stack deployment failed"
-    Write-Info "Helm output:"
-    $helmOutput | ForEach-Object { Write-Host "  $_" }
-    Write-Info "You can check status with: kubectl get pods -n monitoring"
     exit 1
 }
 
