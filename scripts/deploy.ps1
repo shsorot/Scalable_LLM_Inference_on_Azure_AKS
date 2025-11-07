@@ -638,51 +638,6 @@ if (Test-Path "$K8sManifestsDir/11-dcgm-exporter.yaml") {
     Write-Success "DCGM Exporter deployed for GPU metrics"
 }
 
-Write-StepHeader "Configuring Azure Key Vault Integration"
-
-Write-Info "Granting Key Vault access to AKS CSI driver managed identity..."
-$csiDriverIdentity = az aks show `
-    --name $aksClusterName `
-    --resource-group $ResourceGroupName `
-    --query "addonProfiles.azureKeyvaultSecretsProvider.identity.objectId" `
-    -o tsv
-
-if ([string]::IsNullOrWhiteSpace($csiDriverIdentity)) {
-    Write-Warning "Could not get CSI driver identity. Key Vault integration may not work."
-} else {
-    Write-Info "CSI Driver Identity: $csiDriverIdentity"
-    
-    az role assignment create `
-        --role "Key Vault Secrets User" `
-        --assignee $csiDriverIdentity `
-        --scope $keyVaultResourceId `
-        --output none 2>&1 | Out-Null
-    
-    if ($LASTEXITCODE -eq 0) {
-        Write-Success "Key Vault Secrets User role assigned to CSI driver"
-        Write-Info "Waiting 15 seconds for RBAC propagation..."
-        Start-Sleep -Seconds 15
-    } else {
-        Write-Warning "Failed to assign role (may already exist)"
-    }
-}
-
-Write-Info "Deploying SecretProviderClass for Key Vault integration..."
-$tenantId = az account show --query tenantId -o tsv
-
-# Create temporary file with substituted values
-$secretProviderTemplate = Get-Content "$K8sManifestsDir/14-keyvault-secret-provider.yaml" -Raw
-$secretProviderManifest = $secretProviderTemplate `
-    -replace 'KEYVAULT_NAME', $keyVaultName `
-    -replace '# tenantId will be set by deploy.ps1.*', "    tenantId: `"$tenantId`""
-
-$tempSecretProviderFile = Join-Path $env:TEMP "keyvault-secret-provider.yaml"
-Set-Content -Path $tempSecretProviderFile -Value $secretProviderManifest
-
-kubectl apply -f $tempSecretProviderFile | Out-Null
-Remove-Item $tempSecretProviderFile -ErrorAction SilentlyContinue
-Write-Success "SecretProviderClass configured"
-
 Write-Info "Waiting for Open-WebUI pod to be ready (max 5 minutes)..."
 Write-Info "Note: First startup may take 2-3 minutes to download embedding model..."
 kubectl wait --for=condition=ready pod -l app=open-webui -n ollama --timeout=300s
@@ -752,60 +707,98 @@ try {
     Write-Warning "Failed to update extension parameter: $_"
 }
 
-Write-Info "Creating pgvector extension in $postgresDatabaseName database..."
+Write-Info "Retrieving PostgreSQL connection details..."
+$pgPassword = az keyvault secret show --vault-name $keyVaultName --name postgres-admin-password --query value -o tsv 2>$null
 
-# Use external manifest file (k8s/15-pgvector-setup-pod.yaml)
-$pgvectorSetupTemplate = Get-Content "$K8sManifestsDir/15-pgvector-setup-pod.yaml" -Raw
-$pgvectorSetupManifest = $pgvectorSetupTemplate -replace 'POSTGRES_HOST', $pgHost
+if ([string]::IsNullOrWhiteSpace($pgPassword)) {
+    Write-Warning "Could not retrieve PostgreSQL password from Key Vault"
+    Write-Info "You may need to create PGVector extension manually"
+} else {
+    Write-Info "Creating pgvector extension in $postgresDatabaseName database..."    # Create temporary pod manifest
+    $podManifest = @"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pgvector-setup
+  namespace: ollama
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    workload: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  containers:
+    - name: psql
+      image: postgres:16
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+      command:
+        - sh
+        - -c
+        - |
+          export PGPASSWORD='$pgPassword'
+          echo "Connecting to PostgreSQL..."
+          psql -h $pgHost -U $postgresAdminUsername -d $postgresDatabaseName -c "CREATE EXTENSION IF NOT EXISTS vector;" || exit 1
+          echo "pgvector extension created successfully!"
+"@
 
-$tempPodFile = Join-Path $env:TEMP "pgvector-setup-pod.yaml"
-Set-Content -Path $tempPodFile -Value $pgvectorSetupManifest
+    $tempPodFile = Join-Path $env:TEMP "pgvector-setup-pod.yaml"
+    Set-Content -Path $tempPodFile -Value $podManifest
 
-try {
-    # Delete pod if it exists from previous run
-    kubectl delete pod pgvector-setup -n ollama --ignore-not-found=true 2>$null | Out-Null
-    Start-Sleep -Seconds 2
+    try {
+        # Delete pod if it exists from previous run
+        kubectl delete pod pgvector-setup -n ollama --ignore-not-found=true 2>$null | Out-Null
+        Start-Sleep -Seconds 2
 
-    # Create the pod (secrets mounted from Key Vault via CSI driver)
-    Write-Info "Running pgvector setup pod..."
-    kubectl apply -f $tempPodFile | Out-Null
+        # Create the pod
+        Write-Info "Running pgvector setup pod..."
+        kubectl apply -f $tempPodFile | Out-Null
 
-    # Wait for pod to complete (max 60 seconds)
-    Write-Info "Waiting for extension creation..."
-    $maxWait = 60
-    $elapsed = 0
-    $podCompleted = $false
+        # Wait for pod to complete (max 60 seconds)
+        Write-Info "Waiting for extension creation..."
+        $maxWait = 60
+        $elapsed = 0
+        $podCompleted = $false
 
-    while ($elapsed -lt $maxWait -and -not $podCompleted) {
-        Start-Sleep -Seconds 3
-        $elapsed += 3
+        while ($elapsed -lt $maxWait -and -not $podCompleted) {
+            Start-Sleep -Seconds 3
+            $elapsed += 3
 
-        $podStatus = kubectl get pod pgvector-setup -n ollama -o jsonpath='{.status.phase}' 2>$null
-        if ($podStatus -eq "Succeeded") {
-            $podCompleted = $true
-            $logs = kubectl logs pgvector-setup -n ollama 2>$null
-            Write-Info "Pod output: $logs"
-            Write-Success "pgvector extension created successfully in openwebui database"
-        } elseif ($podStatus -eq "Failed") {
-            $logs = kubectl logs pgvector-setup -n ollama 2>$null
-            Write-Warning "Pod failed. Logs: $logs"
-            break
+            $podStatus = kubectl get pod pgvector-setup -n ollama -o jsonpath='{.status.phase}' 2>$null
+            if ($podStatus -eq "Succeeded") {
+                $podCompleted = $true
+                $logs = kubectl logs pgvector-setup -n ollama 2>$null
+                Write-Info "Pod output: $logs"
+                Write-Success "pgvector extension created successfully in openwebui database"
+            } elseif ($podStatus -eq "Failed") {
+                $logs = kubectl logs pgvector-setup -n ollama 2>$null
+                Write-Warning "Pod failed. Logs: $logs"
+                break
+            }
         }
+
+        if (-not $podCompleted) {
+            Write-Warning "pgvector setup pod did not complete in time"
+            Write-Info "Check pod status with: kubectl logs pgvector-setup -n ollama"
+        }
+
+        # Cleanup
+        kubectl delete pod pgvector-setup -n ollama --ignore-not-found=true 2>$null | Out-Null
+        Remove-Item $tempPodFile -ErrorAction SilentlyContinue
+
+    } catch {
+        Write-Warning "Failed to create pgvector extension via Kubernetes job: $_"
+        Write-Info "Extension parameter is enabled, but you may need to create it manually"
+        Write-Info "Run: CREATE EXTENSION IF NOT EXISTS vector; in the openwebui database"
     }
-
-    if (-not $podCompleted) {
-        Write-Warning "pgvector setup pod did not complete in time"
-        Write-Info "Check pod status with: kubectl logs pgvector-setup -n ollama"
-    }
-
-    # Cleanup
-    kubectl delete pod pgvector-setup -n ollama --ignore-not-found=true 2>$null | Out-Null
-    Remove-Item $tempPodFile -ErrorAction SilentlyContinue
-
-} catch {
-    Write-Warning "Failed to create pgvector extension via Kubernetes job: $_"
-    Write-Info "Extension parameter is enabled, but you may need to create it manually"
-    Write-Info "Run: CREATE EXTENSION IF NOT EXISTS vector; in the openwebui database"
 }
 
 # Step 8: Deploy Monitoring Stack (Prometheus + Grafana)
@@ -830,39 +823,6 @@ if ($monitoringExists) {
     }
 }
 
-# Create Grafana dashboards ConfigMap from JSON files
-Write-Info "Creating Grafana dashboards ConfigMap..."
-$dashboardPath = Join-Path $PSScriptRoot "..\dashboards"
-if (Test-Path $dashboardPath) {
-    $dashboardFiles = Get-ChildItem -Path $dashboardPath -Filter "*.json" -File
-    if ($dashboardFiles.Count -gt 0) {
-        Write-Info "Found $($dashboardFiles.Count) dashboard(s): $($dashboardFiles.Name -join ', ')"
-
-        # Delete existing ConfigMap if it exists
-        kubectl delete configmap grafana-dashboards -n monitoring 2>$null | Out-Null
-
-        # Build kubectl create command with all dashboard files
-        $cmArgs = @("create", "configmap", "grafana-dashboards", "--namespace", "monitoring")
-        foreach ($file in $dashboardFiles) {
-            $cmArgs += "--from-file=$($file.FullName)"
-        }
-
-        # Create ConfigMap
-        $cmResult = & kubectl $cmArgs 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "Grafana dashboards ConfigMap created"
-        } else {
-            Write-Warning "Failed to create dashboards ConfigMap: $cmResult"
-            Write-Info "Dashboards will need to be imported manually"
-        }
-    } else {
-        Write-Info "No dashboard JSON files found in $dashboardPath"
-    }
-} else {
-    Write-Warning "Dashboard directory not found: $dashboardPath"
-    Write-Info "Dashboards will need to be imported manually"
-}
-
 # Check if Helm repo is added
 Write-Info "Adding Prometheus Helm repository..."
 $helmRepoAdd = helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>&1
@@ -872,12 +832,54 @@ if ($LASTEXITCODE -ne 0 -and $helmRepoAdd -notlike "*already exists*") {
 $helmRepoUpdate = helm repo update 2>&1 | Out-Null
 Write-Success "Helm repository updated"
 
-# Use external Helm values file (k8s/helm-values/monitoring-values.yaml)
-$monitoringValuesTemplate = Get-Content "$K8sManifestsDir/helm-values/monitoring-values.yaml" -Raw
-$monitoringValuesContent = $monitoringValuesTemplate -replace 'GRAFANA_PASSWORD', $GrafanaPassword
-
+# Create monitoring values file with tolerations
 $monitoringValuesFile = Join-Path $env:TEMP "monitoring-values.yaml"
-Set-Content -Path $monitoringValuesFile -Value $monitoringValuesContent
+$monitoringValues = @"
+# Prometheus + Grafana Stack Values with Tolerations
+defaultTolerations: &commonTolerations
+  - key: CriticalAddonsOnly
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+prometheusOperator:
+  tolerations: *commonTolerations
+  admissionWebhooks:
+    patch:
+      tolerations: *commonTolerations
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    retention: 7d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+    tolerations: *commonTolerations
+
+grafana:
+  adminPassword: $GrafanaPassword
+  service:
+    type: LoadBalancer
+  tolerations: *commonTolerations
+
+alertmanager:
+  alertmanagerSpec:
+    tolerations: *commonTolerations
+
+kube-state-metrics:
+  tolerations: *commonTolerations
+
+prometheus-node-exporter:
+  tolerations:
+    - operator: Exists
+"@
+
+Set-Content -Path $monitoringValuesFile -Value $monitoringValues
 
 Write-Info "Installing kube-prometheus-stack (this may take 2-3 minutes)..."
 $ErrorActionPreference = 'Continue'
@@ -944,8 +946,76 @@ while ($elapsed -lt $maxWait -and -not $grafanaReady) {
 Write-StepHeader "Installing Prometheus Adapter"
 Write-Info "Prometheus Adapter enables HPA to use custom GPU metrics..."
 
-# Use external Helm values file (k8s/helm-values/prometheus-adapter-values.yaml)
-$adapterValuesFile = "$K8sManifestsDir/helm-values/prometheus-adapter-values.yaml"
+$prometheusAdapterValues = @"
+# Prometheus Adapter Configuration
+# Enables custom metrics API for HPA to query GPU metrics from Prometheus
+
+prometheus:
+  url: http://monitoring-kube-prometheus-prometheus.monitoring.svc
+  port: 9090
+
+rules:
+  default: true
+  custom:
+  # DCGM GPU metrics - using exported_namespace and exported_pod labels
+  # These labels point to the actual workload pod using the GPU, not the dcgm-exporter pod
+  - seriesQuery: 'DCGM_FI_DEV_GPU_UTIL{exported_namespace!="",exported_pod!=""}'
+    resources:
+      overrides:
+        exported_namespace: {resource: "namespace"}
+        exported_pod: {resource: "pod"}
+    name:
+      matches: "^(.*)$"
+      as: "gpu_utilization"
+    metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+  - seriesQuery: 'DCGM_FI_DEV_FB_USED{exported_namespace!="",exported_pod!=""}'
+    resources:
+      overrides:
+        exported_namespace: {resource: "namespace"}
+        exported_pod: {resource: "pod"}
+    name:
+      matches: "^(.*)$"
+      as: "gpu_memory_used_bytes"
+    metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+  - seriesQuery: 'DCGM_FI_DEV_FB_FREE{exported_namespace!="",exported_pod!=""}'
+    resources:
+      overrides:
+        exported_namespace: {resource: "namespace"}
+        exported_pod: {resource: "pod"}
+    name:
+      matches: "^(.*)$"
+      as: "gpu_memory_free_bytes"
+    metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+  # Calculate GPU memory utilization percentage
+  - seriesQuery: 'DCGM_FI_DEV_FB_USED{exported_namespace!="",exported_pod!=""}'
+    resources:
+      overrides:
+        exported_namespace: {resource: "namespace"}
+        exported_pod: {resource: "pod"}
+    name:
+      matches: "^(.*)$"
+      as: "gpu_memory_utilization"
+    metricsQuery: 'avg((DCGM_FI_DEV_FB_USED{<<.LabelMatchers>>} / (DCGM_FI_DEV_FB_USED{<<.LabelMatchers>>} + DCGM_FI_DEV_FB_FREE{<<.LabelMatchers>>})) * 100) by (<<.GroupBy>>)'
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# Tolerations to run on system nodes
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
+"@
+
+$adapterValuesFile = Join-Path $env:TEMP "prometheus-adapter-values.yaml"
+Set-Content -Path $adapterValuesFile -Value $prometheusAdapterValues
 
 Write-Info "Installing prometheus-adapter..."
 $ErrorActionPreference = 'Continue'
@@ -983,9 +1053,43 @@ Start-Sleep -Seconds 10
 Write-Info "Creating ServiceMonitors for metrics collection..."
 
 # DCGM Exporter ServiceMonitor
+# Note: Service is already created by k8s/11-dcgm-exporter.yaml
+# We only need to create the ServiceMonitor to tell Prometheus to scrape it
 Write-Info "Creating DCGM ServiceMonitor for Prometheus scraping..."
-kubectl apply -f "$K8sManifestsDir/13-dcgm-servicemonitor.yaml" | Out-Null
-Write-Success "DCGM ServiceMonitor created from k8s/13-dcgm-servicemonitor.yaml"
+if (Test-Path "$K8sManifestsDir/13-dcgm-servicemonitor.yaml") {
+    # Apply from k8s manifests to keep configuration in sync
+    kubectl apply -f "$K8sManifestsDir/13-dcgm-servicemonitor.yaml" | Out-Null
+    Write-Success "DCGM ServiceMonitor created from k8s/13-dcgm-servicemonitor.yaml"
+} else {
+    # Fallback: Create inline if file doesn't exist
+    $dcgmServiceMonitor = @"
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dcgm-exporter
+  namespace: monitoring
+  labels:
+    app: dcgm-exporter
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dcgm-exporter
+  namespaceSelector:
+    matchNames:
+      - ollama
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+"@
+    $dcgmTempFile = Join-Path $env:TEMP "dcgm-servicemonitor.yaml"
+    Set-Content -Path $dcgmTempFile -Value $dcgmServiceMonitor
+    kubectl apply -f $dcgmTempFile | Out-Null
+    Remove-Item $dcgmTempFile -ErrorAction SilentlyContinue
+    Write-Success "DCGM ServiceMonitor created (inline fallback)"
+}
 
 # Get Grafana LoadBalancer IP
 Write-Info "Retrieving Grafana LoadBalancer IP..."
@@ -1123,10 +1227,7 @@ if (-not [string]::IsNullOrWhiteSpace($externalIp) -and $externalIp -ne "pending
     Write-Host "`nStorage Configuration:" -ForegroundColor Yellow
     Write-Host "  Ollama Models : Azure Files Premium (1TB, RWX)" -ForegroundColor White
     Write-Host "  Open-WebUI DB : Azure PostgreSQL Flexible Server (B1ms)" -ForegroundColor White
-    Write-Host "  Open-WebUI Files: Azure Files Premium (azurefile-premium-llm)" -ForegroundColor White
-    Write-Host "  Grafana Data  : Azure Files Premium (10GB, persistent dashboards)" -ForegroundColor White
-    Write-Host "  Prometheus Data: Azure Disk Premium (20GB, persistent metrics)" -ForegroundColor White
-    Write-Host "  Secrets       : Azure Key Vault (CSI driver, no secrets in etcd)" -ForegroundColor White
+    Write-Host "  Database      : PostgreSQL (highly available, managed)" -ForegroundColor White
     Write-Host "  Password      : Stored in Key Vault (secret: postgres-admin-password)" -ForegroundColor White
 
     if ($grafanaIp) {
@@ -1135,16 +1236,7 @@ if (-not [string]::IsNullOrWhiteSpace($externalIp) -and $externalIp -ne "pending
         Write-Host "  Grafana       : http://$grafanaIp" -ForegroundColor White
         Write-Host "  GPU Metrics   : DCGM Exporter + ServiceMonitors configured" -ForegroundColor White
         Write-Host "  Dashboards    : Pre-loaded (GPU Monitoring, Platform Overview)" -ForegroundColor White
-        Write-Host "  Persistence   : Enabled (dashboards survive restarts)" -ForegroundColor White
     }
-
-    Write-Host "`nSecurity Features:" -ForegroundColor Yellow
-    Write-Host "  ? Azure Key Vault integration (all secrets)" -ForegroundColor White
-    Write-Host "  ? CSI driver managed identity (no keys in etcd)" -ForegroundColor White
-    Write-Host "  ? Persistent volumes for all workloads" -ForegroundColor White
-    Write-Host "  ? Cluster restart-safe configuration" -ForegroundColor White
-    Write-Host "  ? Secret rotation support enabled" -ForegroundColor White
-    Write-Host "  See: docs/SECURITY-BEST-PRACTICES.md for details" -ForegroundColor DarkGray
 } else {
     Write-Host "Open-WebUI URL    : [PENDING] Run 'kubectl get svc -n ollama' to get IP" -ForegroundColor Yellow
     Write-Host "Ollama API        : http://$ollamaClusterIp:11434 (internal)" -ForegroundColor Cyan
@@ -1155,19 +1247,6 @@ Write-Host "  kubectl get pods -n ollama" -ForegroundColor White
 Write-Host "  kubectl get svc -n ollama" -ForegroundColor White
 Write-Host "  kubectl logs -f -l app=ollama -n ollama" -ForegroundColor White
 Write-Host "  kubectl logs -f -l app=open-webui -n ollama" -ForegroundColor White
-
-Write-Host "`nCluster Lifecycle Management:" -ForegroundColor Yellow
-Write-Host "  To stop cluster and save costs (evening):" -ForegroundColor White
-Write-Host "    .\scripts\cluster-lifecycle.ps1 -Action Stop -ResourceGroup $ResourceGroupName -ClusterName $aksClusterName -PostgresServerName $($postgresServerFqdn -replace '\..*')" -ForegroundColor Gray
-Write-Host "  To start cluster (morning):" -ForegroundColor White
-Write-Host "    .\scripts\cluster-lifecycle.ps1 -Action Start -ResourceGroup $ResourceGroupName -ClusterName $aksClusterName -PostgresServerName $($postgresServerFqdn -replace '\..*')" -ForegroundColor Gray
-Write-Host "  Check status:" -ForegroundColor White
-Write-Host "    .\scripts\cluster-lifecycle.ps1 -Action Status -ResourceGroup $ResourceGroupName -ClusterName $aksClusterName -PostgresServerName $($postgresServerFqdn -replace '\..*')" -ForegroundColor Gray
-
-Write-Host "`nDashboard Management:" -ForegroundColor Yellow
-Write-Host "  Sync updated dashboards to Grafana:" -ForegroundColor White
-Write-Host "    .\scripts\sync-grafana-dashboards.ps1 -RestartGrafana" -ForegroundColor Gray
-
 Write-Host "`nTo clean up:" -ForegroundColor Yellow
 Write-Host "  .\scripts\cleanup.ps1 -Prefix $Prefix" -ForegroundColor White
 Write-Host "========================================`n" -ForegroundColor Green
