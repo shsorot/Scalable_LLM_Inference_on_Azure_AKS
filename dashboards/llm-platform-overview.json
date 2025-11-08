@@ -600,7 +600,7 @@
               }
             ]
           },
-          "unit": "decmbytes"
+          "unit": "decgbytes"
         }
       },
       "gridPos": {
@@ -623,12 +623,12 @@
       "pluginVersion": "9.0.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_FB_USED / 1024 / 1024",
+          "expr": "DCGM_FI_DEV_FB_USED / 1024 / 1024 / 1024",
           "legendFormat": "Used: GPU {{gpu}} - {{kubernetes_node}}",
           "refId": "A"
         },
         {
-          "expr": "DCGM_FI_DEV_FB_FREE / 1024 / 1024",
+          "expr": "DCGM_FI_DEV_FB_FREE / 1024 / 1024 / 1024",
           "legendFormat": "Free: GPU {{gpu}} - {{kubernetes_node}}",
           "refId": "B"
         }
