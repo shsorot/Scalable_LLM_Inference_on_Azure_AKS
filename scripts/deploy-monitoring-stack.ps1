@@ -96,7 +96,7 @@ Set-Content -Path $monitoringValuesFile -Value $monitoringValues
 
 Write-Host "[INFO] Installing kube-prometheus-stack (this may take 5-10 minutes)..." -ForegroundColor Cyan
 $ErrorActionPreference = 'Continue'
-$helmOutput = helm install monitoring prometheus-community/kube-prometheus-stack `
+$helmOutput = helm upgrade --install monitoring prometheus-community/kube-prometheus-stack `
     --namespace monitoring `
     -f $monitoringValuesFile `
     --wait `

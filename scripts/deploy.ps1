@@ -190,19 +190,60 @@ if ($rgExists -eq "true") {
     Write-Success "Resource group created"
 }
 
-Write-StepHeader "Generating PostgreSQL Admin Password"
+Write-StepHeader "Managing Passwords (PostgreSQL & Grafana)"
 
-# Generate secure random password for PostgreSQL
-$PostgresPassword = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 24 | ForEach-Object {[char]$_})
-# Add special characters to meet Azure PostgreSQL requirements
-$PostgresPassword = $PostgresPassword + "!@#"
-Write-Success "PostgreSQL admin password generated (will be stored in Key Vault)"
+# Check if Key Vault will exist/exists to retrieve existing passwords
+$keyVaultNamePreview = "${Prefix}kv$(Get-Random -Minimum 1000 -Maximum 9999)"
+# Try to get Key Vault name from existing deployment first
+$existingKeyVaultName = az deployment group show `
+    --name main `
+    --resource-group $ResourceGroupName `
+    --query 'properties.outputs.keyVaultName.value' `
+    --output tsv 2>$null
 
-Write-StepHeader "Generating Grafana Admin Password"
+if ($existingKeyVaultName) {
+    $keyVaultNamePreview = $existingKeyVaultName
+    Write-Info "Found existing Key Vault: $keyVaultNamePreview"
+}
 
-# Generate secure random password for Grafana
-$GrafanaPassword = New-RandomPassword -Length 16
-Write-Success "Grafana admin password generated (will be stored in Key Vault)"
+# Try to retrieve existing passwords from Key Vault
+$existingPostgresPassword = $null
+$existingGrafanaPassword = $null
+
+if ($existingKeyVaultName) {
+    Write-Info "Checking for existing passwords in Key Vault..."
+    $existingPostgresPassword = az keyvault secret show `
+        --vault-name $existingKeyVaultName `
+        --name "postgres-admin-password" `
+        --query value -o tsv 2>$null
+
+    $existingGrafanaPassword = az keyvault secret show `
+        --vault-name $existingKeyVaultName `
+        --name "grafana-admin-password" `
+        --query value -o tsv 2>$null
+}
+
+# Use existing or generate new PostgreSQL password
+if ($existingPostgresPassword) {
+    $PostgresPassword = $existingPostgresPassword
+    Write-Success "Using existing PostgreSQL password from Key Vault"
+} else {
+    # Generate secure random password for PostgreSQL
+    $PostgresPassword = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 24 | ForEach-Object {[char]$_})
+    # Add special characters to meet Azure PostgreSQL requirements
+    $PostgresPassword = $PostgresPassword + "!@#"
+    Write-Success "Generated new PostgreSQL admin password (will be stored in Key Vault)"
+}
+
+# Use existing or generate new Grafana password
+if ($existingGrafanaPassword) {
+    $GrafanaPassword = $existingGrafanaPassword
+    Write-Success "Using existing Grafana password from Key Vault"
+} else {
+    # Generate secure random password for Grafana
+    $GrafanaPassword = New-RandomPassword -Length 16
+    Write-Success "Generated new Grafana admin password (will be stored in Key Vault)"
+}
 
 Write-Info "Deploying Bicep template (this takes 8-10 minutes)..."
 Write-Info "Progress will be shown below. Please wait..."
@@ -273,17 +314,22 @@ if ($LASTEXITCODE -eq 0) {
     Start-Sleep -Seconds 15
 }
 
-Write-Info "Storing PostgreSQL password in Key Vault..."
-az keyvault secret set `
-    --vault-name $keyVaultName `
-    --name "postgres-admin-password" `
-    --value $PostgresPassword `
-    --output none
+# Only store PostgreSQL password if it's a new password
+if (-not $existingPostgresPassword) {
+    Write-Info "Storing PostgreSQL password in Key Vault..."
+    az keyvault secret set `
+        --vault-name $keyVaultName `
+        --name "postgres-admin-password" `
+        --value $PostgresPassword `
+        --output none
 
-if ($LASTEXITCODE -eq 0) {
-    Write-Success "PostgreSQL password stored in Key Vault"
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "PostgreSQL password stored in Key Vault"
+    } else {
+        Write-Warning "Failed to store PostgreSQL password in Key Vault"
+    }
 } else {
-    Write-Warning "Failed to store PostgreSQL password in Key Vault"
+    Write-Info "PostgreSQL password already exists in Key Vault (reusing existing)"
 }
 
 Write-Info "Storing PostgreSQL connection string in Key Vault..."
@@ -302,17 +348,22 @@ if ($LASTEXITCODE -eq 0) {
     Write-Warning "Failed to store connection string in Key Vault"
 }
 
-Write-Info "Storing Grafana admin password in Key Vault..."
-az keyvault secret set `
-    --vault-name $keyVaultName `
-    --name "grafana-admin-password" `
-    --value $GrafanaPassword `
-    --output none
+# Only store Grafana password if it's a new password
+if (-not $existingGrafanaPassword) {
+    Write-Info "Storing Grafana admin password in Key Vault..."
+    az keyvault secret set `
+        --vault-name $keyVaultName `
+        --name "grafana-admin-password" `
+        --value $GrafanaPassword `
+        --output none
 
-if ($LASTEXITCODE -eq 0) {
-    Write-Success "Grafana password stored in Key Vault"
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Grafana password stored in Key Vault"
+    } else {
+        Write-Warning "Failed to store Grafana password in Key Vault"
+    }
 } else {
-    Write-Warning "Failed to store Grafana password in Key Vault"
+    Write-Info "Grafana password already exists in Key Vault (reusing existing)"
 }
 
 Write-StepHeader "Configuring kubectl and RBAC"
@@ -1013,7 +1064,7 @@ Write-Success "Helm repository updated"
 # Deploy kube-prometheus-stack
 Write-Info "Installing kube-prometheus-stack (this may take 2-3 minutes)..."
 $helmInstallArgs = @(
-    "install", "monitoring", "prometheus-community/kube-prometheus-stack",
+    "upgrade", "--install", "monitoring", "prometheus-community/kube-prometheus-stack",
     "--namespace", "monitoring",
     "--set", "grafana.adminPassword=$grafanaPassword",
     "--set", "grafana.service.type=LoadBalancer",
@@ -1152,7 +1203,7 @@ Set-Content -Path $adapterValuesFile -Value $prometheusAdapterValues
 
 Write-Info "Installing prometheus-adapter..."
 $ErrorActionPreference = 'Continue'
-$adapterOutput = helm install prometheus-adapter prometheus-community/prometheus-adapter `
+$adapterOutput = helm upgrade --install prometheus-adapter prometheus-community/prometheus-adapter `
     --namespace monitoring `
     -f $adapterValuesFile `
     --wait `
