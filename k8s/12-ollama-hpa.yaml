@@ -17,37 +17,38 @@ spec:
     name: ollama
 
   # Scaling boundaries
-  minReplicas: 1   # Start with 1, scale up based on load
-  maxReplicas: 5   # Limited by GPU node availability (will trigger cluster autoscaler)
+  minReplicas: 1   # Start with 1 pod, maximize single-GPU utilization first
+  maxReplicas: 5   # Scale up when GPU memory exhausted (triggers cluster autoscaler)
 
   # Scaling metrics
   metrics:
     # Primary: GPU memory utilization
     # Note: Requires Prometheus Adapter with custom metrics
-    # Metric format: DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_TOTAL
+    # Metric format: DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_TOTAL * 100
+    # Returns percentage as milli-units (e.g., 88.487 = 88487m)
     - type: Pods
       pods:
         metric:
           name: gpu_memory_utilization
         target:
           type: AverageValue
-          averageValue: "70"  # Scale up when avg GPU memory > 70%
+          averageValue: 60000m  # Scale when GPU memory > 60% (60000 milli-units - LOWERED FOR DEMO)
 
-    # Fallback: CPU utilization (for non-inference workload)
+    # Fallback: CPU utilization (only scale if CPU is bottleneck)
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 75
+          averageUtilization: 85
 
-    # Memory utilization (system RAM)
+    # Memory utilization (system RAM) - less critical for GPU workloads
     - type: Resource
       resource:
         name: memory
         target:
           type: Utilization
-          averageUtilization: 80
+          averageUtilization: 85
 
   # Scaling behavior - conservative for GPU workloads
   behavior:

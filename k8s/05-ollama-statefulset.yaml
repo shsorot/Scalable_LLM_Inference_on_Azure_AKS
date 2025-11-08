@@ -12,7 +12,7 @@ metadata:
     app.kubernetes.io/component: llm-server
 spec:
   serviceName: ollama
-  replicas: 1
+  replicas: 1  # Start with 1 pod, scale only when GPU memory exhausted
   selector:
     matchLabels:
       app: ollama
@@ -83,14 +83,27 @@ spec:
 
           # Environment variables
           env:
+            # NVIDIA GPU Configuration - CRITICAL for GPU detection
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: "compute,utility"
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+
+            # Ollama Configuration
             - name: OLLAMA_HOST
               value: "0.0.0.0:11434"
             - name: OLLAMA_ORIGINS
               value: "*"  # Allow CORS for WebUI
             - name: OLLAMA_NUM_PARALLEL
-              value: "2"  # Concurrent requests
+              value: "4"  # Handle multiple concurrent requests
             - name: OLLAMA_MAX_LOADED_MODELS
-              value: "1"  # Keep one model in memory
+              value: "0"  # No limit - load as many models as GPU memory allows
+            - name: OLLAMA_KEEP_ALIVE
+              value: "30m"  # Keep models loaded for 30 minutes (for scaling tests, increase this)
+
+            # Optional: HuggingFace token for gated models
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:

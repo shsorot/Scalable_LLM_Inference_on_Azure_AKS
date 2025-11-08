@@ -58,6 +58,7 @@ param(
 $ErrorActionPreference = 'Continue'
 $resourceGroup = "${Prefix}-rg"
 $namespace = "ollama"
+$monitoringNamespace = "monitoring"
 
 Write-Host "`n============================================" -ForegroundColor Magenta
 Write-Host "  KubeCon NA 2025 - LLM Demo Cleanup" -ForegroundColor Magenta
@@ -130,19 +131,28 @@ if ($DataOnly) {
         exit 1
     }
 
-    # Delete WebUI pod (will restart with clean database)
-    Write-Host "  -> Restarting WebUI pod (clears in-memory sessions)..." -ForegroundColor Gray
+    # Delete WebUI pods and PVCs (clears all stored data)
+    Write-Host "  -> Deleting WebUI pods..." -ForegroundColor Gray
     kubectl delete pod -n $namespace -l app=open-webui 2>&1 | Out-Null
 
-    if ($?) {
-        Write-Host "  [OK] WebUI pod deleted (will restart automatically)" -ForegroundColor Green
+    Write-Host "  -> Deleting WebUI PVCs (this will wipe all stored files)..." -ForegroundColor Gray
+    kubectl delete pvc -n $namespace open-webui-files-pvc 2>&1 | Out-Null
 
-        Write-Host "`n  Waiting for new pod to start..." -ForegroundColor Gray
-        Start-Sleep -Seconds 5
+    # Also delete Ollama PVCs to clear all model data if requested
+    if ($WipeDatabase) {
+        Write-Host "  -> Deleting Ollama PVCs (this will wipe all models)..." -ForegroundColor Gray
+        kubectl delete pvc -n $namespace ollama-models-pvc 2>&1 | Out-Null
+    }
+
+    if ($?) {
+        Write-Host "  [OK] Data cleared successfully" -ForegroundColor Green
+
+        Write-Host "`n  Waiting for new WebUI pods to start..." -ForegroundColor Gray
+        Start-Sleep -Seconds 10
 
         # Wait for pod to be ready
         $attempts = 0
-        while ($attempts -lt 24) {
+        while ($attempts -lt 30) {
             $podReady = kubectl get pods -n $namespace -l app=open-webui -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>$null
             if ($podReady -eq "True") {
                 Write-Host "  [OK] WebUI is ready" -ForegroundColor Green
@@ -152,13 +162,17 @@ if ($DataOnly) {
             $attempts++
         }
 
-        if ($attempts -ge 24) {
+        if ($attempts -ge 30) {
             Write-Host "  [WARN] WebUI taking longer than expected to restart" -ForegroundColor Yellow
             Write-Host "  Check status: kubectl get pods -n $namespace" -ForegroundColor Gray
         }
 
         Write-Host "`n[OK] User data reset complete" -ForegroundColor Green
         Write-Host "  -> All user accounts and conversations cleared" -ForegroundColor Gray
+        Write-Host "  -> PVCs deleted and recreated" -ForegroundColor Gray
+        if ($WipeDatabase) {
+            Write-Host "  -> Model data cleared (will need to reload models)" -ForegroundColor Gray
+        }
         Write-Host "  -> Infrastructure still running" -ForegroundColor Gray
         Write-Host "  -> Next sign-up will create new admin account" -ForegroundColor Gray
         Write-Host ""
@@ -169,7 +183,7 @@ if ($DataOnly) {
     }
 }
 
-Write-Host "[1/2] Deleting Kubernetes resources..." -ForegroundColor Green
+Write-Host "[1/3] Deleting Kubernetes resources..." -ForegroundColor Green
 
 # Find the AKS cluster in the resource group that matches our prefix
 $aksClusterName = az aks list --resource-group $resourceGroup --query "[?starts_with(name, '${Prefix}-aks-')].name" -o tsv 2>$null
@@ -186,19 +200,49 @@ if ($aksClusterName) {
         $currentContext = kubectl config current-context 2>$null
         Write-Host "  -> Connected to context: $currentContext" -ForegroundColor Gray
 
-        $nsCheck = kubectl get namespace $namespace --no-headers 2>$null
+        # Clean up Helm releases first (before namespace deletion)
+        Write-Host "  -> Checking for Helm releases..." -ForegroundColor Gray
+        $helmReleases = helm list -A -o json 2>$null | ConvertFrom-Json
+        if ($helmReleases -and $helmReleases.Count -gt 0) {
+            foreach ($release in $helmReleases) {
+                if ($release.namespace -eq $monitoringNamespace -or $release.namespace -eq $namespace) {
+                    Write-Host "     Uninstalling Helm release: $($release.name) from $($release.namespace)..." -ForegroundColor Gray
+                    helm uninstall $release.name -n $release.namespace 2>&1 | Out-Null
+                    if ($?) {
+                        Write-Host "     [OK] Uninstalled: $($release.name)" -ForegroundColor Green
+                    }
+                }
+            }
+        }
 
+        # Delete ollama namespace
+        $nsCheck = kubectl get namespace $namespace --no-headers 2>$null
         if ($?) {
             Write-Host "  -> Deleting namespace '$namespace' (this cascades to all resources)..." -ForegroundColor Gray
-            kubectl delete namespace $namespace --timeout=120s 2>&1 | Out-Null
+            kubectl delete namespace $namespace --timeout=300s 2>&1 | Out-Null
 
             if ($?) {
-                Write-Host "  [OK] Namespace deleted" -ForegroundColor Gray
+                Write-Host "  [OK] Namespace '$namespace' deleted" -ForegroundColor Green
             } else {
-                Write-Host "  [WARN] Failed to delete namespace (may require manual cleanup)" -ForegroundColor Yellow
+                Write-Host "  [WARN] Failed to delete namespace '$namespace' (may require manual cleanup)" -ForegroundColor Yellow
             }
         } else {
             Write-Host "  [INFO] Namespace '$namespace' not found (already deleted or never created)" -ForegroundColor Gray
+        }
+
+        # Delete monitoring namespace
+        $monitoringCheck = kubectl get namespace $monitoringNamespace --no-headers 2>$null
+        if ($?) {
+            Write-Host "  -> Deleting namespace '$monitoringNamespace' (Prometheus, Grafana)..." -ForegroundColor Gray
+            kubectl delete namespace $monitoringNamespace --timeout=300s 2>&1 | Out-Null
+
+            if ($?) {
+                Write-Host "  [OK] Namespace '$monitoringNamespace' deleted" -ForegroundColor Green
+            } else {
+                Write-Host "  [WARN] Failed to delete namespace '$monitoringNamespace' (may require manual cleanup)" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  [INFO] Namespace '$monitoringNamespace' not found (already deleted or never created)" -ForegroundColor Gray
         }
     } else {
         Write-Host "  [ERROR] Failed to get credentials for cluster: $aksClusterName" -ForegroundColor Red
@@ -213,14 +257,14 @@ if ($WipeDatabase -and $KeepResourceGroup) {
     Write-Host "`n[DATABASE] Wiping PostgreSQL database content..." -ForegroundColor Yellow
 
     # Get PostgreSQL server name (filter by prefix pattern)
-    $pgServerName = az postgres flexible-server list --resource-group $resourceGroup --query "[?starts_with(name, '${Prefix}-pg-')].name" -o tsv 2>$null
+    $pgServerFqdn = az postgres flexible-server list --resource-group $resourceGroup --query "[?starts_with(name, '${Prefix}-pg-')].fullyQualifiedDomainName" -o tsv 2>$null
 
-    if ($pgServerName) {
-        $pgServerName = $pgServerName.Trim()
-        Write-Host "  -> Found PostgreSQL server: $pgServerName" -ForegroundColor Gray
+    if ($pgServerFqdn) {
+        $pgServerFqdn = $pgServerFqdn.Trim()
+        Write-Host "  -> Found PostgreSQL server: $pgServerFqdn" -ForegroundColor Gray
 
-        # Get admin password from Key Vault (filter by prefix pattern)
-        $kvName = az keyvault list --resource-group $resourceGroup --query "[?starts_with(name, '${Prefix}kv')].name" -o tsv 2>$null
+        # Get admin password from Key Vault (updated pattern to match actual naming)
+        $kvName = az keyvault list --resource-group $resourceGroup --query "[?contains(name, '$Prefix')].name" -o tsv 2>$null
         if ($kvName) {
             $kvName = $kvName.Trim()
             Write-Host "  -> Found Key Vault: $kvName" -ForegroundColor Gray
@@ -229,25 +273,55 @@ if ($WipeDatabase -and $KeepResourceGroup) {
             $pgPassword = az keyvault secret show --vault-name $kvName --name postgres-admin-password --query value -o tsv 2>$null
 
             if ($pgPassword) {
-                # Build connection string
-                $connStr = "host=$pgServerName.postgres.database.azure.com port=5432 dbname=openwebui user=pgadmin password=$pgPassword sslmode=require"
+                Write-Host "  -> Dropping and recreating database via pod..." -ForegroundColor Gray
 
-                Write-Host "  -> Executing database wipe script..." -ForegroundColor Gray
+                # Create a temporary pod to wipe database
+                $wipeManifest = @"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pg-wipe-temp
+  namespace: default
+spec:
+  restartPolicy: Never
+  containers:
+    - name: postgres
+      image: postgres:16
+      command:
+        - sh
+        - -c
+        - |
+          export PGPASSWORD='$pgPassword'
+          echo "Dropping database openwebui..."
+          psql -h $pgServerFqdn -U pgadmin -d postgres -c "DROP DATABASE IF EXISTS openwebui;"
+          echo "Recreating database openwebui..."
+          psql -h $pgServerFqdn -U pgadmin -d postgres -c "CREATE DATABASE openwebui;"
+          echo "Dropping database grafana..."
+          psql -h $pgServerFqdn -U pgadmin -d postgres -c "DROP DATABASE IF EXISTS grafana;"
+          echo "Recreating database grafana..."
+          psql -h $pgServerFqdn -U pgadmin -d postgres -c "CREATE DATABASE grafana;"
+          echo "Database wipe completed!"
+"@
 
-                # Use Python script to wipe database (more reliable than Azure CLI)
-                $scriptPath = Join-Path $PSScriptRoot "wipe-database.py"
-                if (Test-Path $scriptPath) {
-                    $result = python $scriptPath "$connStr" 2>&1
+                $tempFile = Join-Path $env:TEMP "pg-wipe-temp.yaml"
+                Set-Content -Path $tempFile -Value $wipeManifest
 
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Host "  [OK] Database wiped successfully" -ForegroundColor Green
-                        Write-Host "  -> PGVector extensions will be recreated on next deployment" -ForegroundColor Gray
-                    } else {
-                        Write-Host "  [WARN] Database wipe failed: $result" -ForegroundColor Yellow
-                    }
+                kubectl apply -f $tempFile 2>&1 | Out-Null
+                Start-Sleep -Seconds 10
+
+                # Check pod status
+                $podStatus = kubectl get pod pg-wipe-temp -o jsonpath='{.status.phase}' 2>$null
+                if ($podStatus -eq "Succeeded") {
+                    $logs = kubectl logs pg-wipe-temp 2>$null
+                    Write-Host "  [OK] Database wiped successfully" -ForegroundColor Green
+                    Write-Host "     $logs" -ForegroundColor Gray
                 } else {
-                    Write-Host "  [ERROR] wipe-database.py not found at $scriptPath" -ForegroundColor Red
+                    Write-Host "  [WARN] Database wipe may have failed (pod status: $podStatus)" -ForegroundColor Yellow
                 }
+
+                # Cleanup
+                kubectl delete pod pg-wipe-temp 2>&1 | Out-Null
+                Remove-Item $tempFile -ErrorAction SilentlyContinue
             } else {
                 Write-Host "  [WARN] Could not retrieve PostgreSQL password from Key Vault" -ForegroundColor Yellow
             }
@@ -314,7 +388,8 @@ if (-not $KeepResourceGroup) {
     Write-Host "`n[2.5/2] Checking for soft-deleted Key Vaults to purge..." -ForegroundColor Green
     Write-Host "  -> Looking for Key Vaults with prefix '$Prefix'..." -ForegroundColor Gray
 
-    $deletedVaults = az keyvault list-deleted --query "[?starts_with(name, '${Prefix}kv')].{Name:name, Location:properties.location}" -o json 2>$null | ConvertFrom-Json
+    # Updated pattern to match actual Key Vault naming (contains prefix, not starts with)
+    $deletedVaults = az keyvault list-deleted --query "[?contains(name, '${Prefix}')].{Name:name, Location:properties.location}" -o json 2>$null | ConvertFrom-Json
 
     if ($deletedVaults -and $deletedVaults.Count -gt 0) {
         Write-Host "  -> Found $($deletedVaults.Count) soft-deleted Key Vault(s)" -ForegroundColor Yellow

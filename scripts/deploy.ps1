@@ -564,36 +564,45 @@ $totalGpus = kubectl get nodes -l workload=llm -o json | ConvertFrom-Json |
 
 Write-Info "Total GPUs available in cluster: $totalGpus"
 
-Write-Info "Deploying GPU monitoring (DCGM Exporter)..."
-if (Test-Path "$K8sManifestsDir/11-dcgm-exporter.yaml") {
-    kubectl apply -f "$K8sManifestsDir/11-dcgm-exporter.yaml"
-    Write-Success "DCGM Exporter deployed for GPU metrics"
-
-    Write-Info "Waiting for DCGM Exporter to be ready..."
-    $maxWait = 60
-    $elapsed = 0
-    while ($elapsed -lt $maxWait) {
-        $dcgmReady = kubectl get pods -n ollama -l app.kubernetes.io/name=dcgm-exporter -o jsonpath='{.items[*].status.phase}' 2>$null
-        if ($dcgmReady -match "Running") {
-            Write-Success "DCGM Exporter is ready"
-            break
-        }
-        Start-Sleep -Seconds 5
-        $elapsed += 5
-    }
-} else {
-    Write-Warning "DCGM Exporter manifest not found, skipping GPU metrics deployment"
-}
-
 Write-StepHeader "Deploying Kubernetes Resources"
+
+Write-Info "Creating Ollama namespace (required for GPU monitoring and workloads)..."
+kubectl apply -f "$K8sManifestsDir/01-namespace.yaml"
+Write-Success "Ollama namespace created"
 
 Write-Info "Applying resource quota..."
 kubectl apply -f "$K8sManifestsDir/09-resource-quota.yaml"
 Write-Success "Resource quota applied"
 
-Write-Info "Creating Ollama namespace..."
-kubectl apply -f "$K8sManifestsDir/01-namespace.yaml"
-Write-Success "Ollama namespace created"
+Write-Info "Deploying GPU monitoring (DCGM Exporter)..."
+if (Test-Path "$K8sManifestsDir/11-dcgm-exporter.yaml") {
+    kubectl apply -f "$K8sManifestsDir/11-dcgm-exporter.yaml"
+    Write-Success "DCGM Exporter deployed for GPU metrics"
+
+    Write-Info "Waiting for DCGM Exporter to be ready (max 60 seconds)..."
+    $maxWait = 60
+    $elapsed = 0
+    $dcgmReady = $false
+    while ($elapsed -lt $maxWait) {
+        $dcgmPods = kubectl get pods -n ollama -l app.kubernetes.io/name=dcgm-exporter -o jsonpath='{.items[*].status.phase}' 2>$null
+        if ($dcgmPods -match "Running") {
+            $dcgmReady = $true
+            Write-Success "DCGM Exporter is ready and collecting GPU metrics"
+            break
+        }
+        Write-Host "  Waiting for DCGM pod... ($elapsed/$maxWait seconds)" -ForegroundColor Gray
+        Start-Sleep -Seconds 5
+        $elapsed += 5
+    }
+
+    if (-not $dcgmReady) {
+        Write-Warning "DCGM Exporter did not become ready within timeout, but continuing deployment"
+        Write-Info "Check status later: kubectl get pods -n ollama -l app.kubernetes.io/name=dcgm-exporter"
+    }
+} else {
+    Write-Warning "DCGM Exporter manifest not found at $K8sManifestsDir/11-dcgm-exporter.yaml"
+    Write-Warning "GPU metrics will not be available for monitoring and autoscaling"
+}
 
 Write-Info "Deploying Azure Key Vault SecretProviderClass..."
 $tenantId = az account show --query tenantId -o tsv
@@ -897,27 +906,156 @@ Write-StepHeader "Deploying Monitoring Stack (Prometheus + Grafana)"
 # ================================================================================
 Write-Info "Creating Grafana database in PostgreSQL..."
 
-& "$PSScriptRoot\setup-grafana-database.ps1" `
-    -KeyVaultName $keyVaultName `
-    -PostgresServerFqdn $postgresServerFqdn `
-    -PostgresAdminUsername $postgresAdminUsername
+$pgPassword = az keyvault secret show --vault-name $keyVaultName --name postgres-admin-password --query value -o tsv 2>$null
 
-# Step 8.2: Deploy Monitoring Stack
+if ([string]::IsNullOrWhiteSpace($pgPassword)) {
+    Write-Warning "Could not retrieve PostgreSQL password from Key Vault"
+    Write-Warning "Grafana will use default SQLite database instead"
+} else {
+    # Create temporary pod to setup Grafana database
+    $grafanaDbPodManifest = @"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: grafana-db-setup
+  namespace: ollama
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    workload: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  containers:
+    - name: psql
+      image: postgres:16
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+      command:
+        - sh
+        - -c
+        - |
+          export PGPASSWORD='$pgPassword'
+          echo "Connecting to PostgreSQL..."
+          psql -h $postgresServerFqdn -U $postgresAdminUsername -d postgres -c "SELECT 1 FROM pg_database WHERE datname = 'grafana'" | grep -q 1 || \
+          psql -h $postgresServerFqdn -U $postgresAdminUsername -d postgres -c "CREATE DATABASE grafana;" || exit 1
+          echo "Grafana database ready!"
+"@
+
+    $tempGrafanaDbPodFile = Join-Path $env:TEMP "grafana-db-setup-pod.yaml"
+    Set-Content -Path $tempGrafanaDbPodFile -Value $grafanaDbPodManifest
+
+    try {
+        kubectl delete pod grafana-db-setup -n ollama --ignore-not-found=true 2>&1 | Out-Null
+        Start-Sleep -Seconds 2
+
+        Write-Info "Running Grafana database setup pod..."
+        kubectl apply -f $tempGrafanaDbPodFile | Out-Null
+
+        Write-Info "Waiting for database creation (max 60 seconds)..."
+        $maxWait = 60
+        $elapsed = 0
+        $podCompleted = $false
+
+        while ($elapsed -lt $maxWait -and -not $podCompleted) {
+            Start-Sleep -Seconds 3
+            $elapsed += 3
+
+            $podStatus = kubectl get pod grafana-db-setup -n ollama -o jsonpath='{.status.phase}' 2>$null
+            if ($podStatus -eq "Succeeded") {
+                $podCompleted = $true
+                $logs = kubectl logs grafana-db-setup -n ollama 2>$null
+                Write-Host "  $logs" -ForegroundColor Gray
+                Write-Success "Grafana database created successfully"
+            } elseif ($podStatus -eq "Failed") {
+                $logs = kubectl logs grafana-db-setup -n ollama 2>$null
+                Write-Warning "Database setup pod failed. Logs: $logs"
+                break
+            }
+        }
+
+        if (-not $podCompleted) {
+            Write-Warning "Grafana database setup did not complete in time, but continuing..."
+        }
+
+        kubectl delete pod grafana-db-setup -n ollama --ignore-not-found=true 2>&1 | Out-Null
+        Remove-Item $tempGrafanaDbPodFile -ErrorAction SilentlyContinue
+
+    } catch {
+        Write-Warning "Failed to create Grafana database: $_"
+        Write-Info "Grafana will use default SQLite database"
+    }
+}
+
+# Step 8.2: Deploy Monitoring Stack with Helm
 # ================================================================================
+Write-Info "Deploying Prometheus + Grafana via Helm..."
 
+# Create monitoring namespace if it doesn't exist
+kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f - | Out-Null
+
+# Get passwords from Key Vault
 $grafanaPassword = az keyvault secret show --vault-name $keyVaultName --name grafana-admin-password --query value -o tsv 2>$null
 $postgresPassword = az keyvault secret show --vault-name $keyVaultName --name postgres-admin-password --query value -o tsv 2>$null
 
-$deploymentResult = & "$PSScriptRoot\deploy-monitoring-stack.ps1" `
-    -GrafanaPassword $grafanaPassword `
-    -PostgresPassword $postgresPassword `
-    -PostgresServerFqdn $postgresServerFqdn `
-    -PostgresAdminUsername $postgresAdminUsername
+# Add Helm repo
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>&1 | Out-Null
+helm repo update 2>&1 | Out-Null
+Write-Success "Helm repository updated"
 
-if (-not $deploymentResult) {
-    Write-ErrorMsg "Monitoring stack deployment failed"
+# Deploy kube-prometheus-stack
+Write-Info "Installing kube-prometheus-stack (this may take 2-3 minutes)..."
+$helmInstallArgs = @(
+    "install", "monitoring", "prometheus-community/kube-prometheus-stack",
+    "--namespace", "monitoring",
+    "--set", "grafana.adminPassword=$grafanaPassword",
+    "--set", "grafana.service.type=LoadBalancer",
+    "--set", "grafana.persistence.enabled=true",
+    "--set", "grafana.persistence.size=10Gi",
+    "--set", "grafana.initChownData.enabled=false",
+    "--set", "prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false",
+    "--set", "prometheus.prometheusSpec.retention=7d",
+    "--set", "prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.accessModes[0]=ReadWriteOnce",
+    "--set", "prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage=20Gi",
+    "--set", "prometheusOperator.admissionWebhooks.patch.nodeSelector.workload=system",
+    "--set", "prometheusOperator.admissionWebhooks.patch.tolerations[0].key=CriticalAddonsOnly",
+    "--set", "prometheusOperator.admissionWebhooks.patch.tolerations[0].operator=Equal",
+    "--set", "prometheusOperator.admissionWebhooks.patch.tolerations[0].value=true",
+    "--set", "prometheusOperator.admissionWebhooks.patch.tolerations[0].effect=NoSchedule"
+)
+
+# Add PostgreSQL configuration if password is available
+if (-not [string]::IsNullOrWhiteSpace($postgresPassword)) {
+    Write-Info "Configuring Grafana to use PostgreSQL backend..."
+    $helmInstallArgs += @(
+        "--set", "grafana.env.GF_DATABASE_TYPE=postgres",
+        "--set", "grafana.env.GF_DATABASE_HOST=$postgresServerFqdn`:5432",
+        "--set", "grafana.env.GF_DATABASE_NAME=grafana",
+        "--set", "grafana.env.GF_DATABASE_USER=$postgresAdminUsername",
+        "--set", "grafana.env.GF_DATABASE_PASSWORD=$postgresPassword",
+        "--set", "grafana.env.GF_DATABASE_SSL_MODE=require"
+    )
+} else {
+    Write-Info "Using default SQLite database for Grafana"
+}
+
+$helmOutput = & helm $helmInstallArgs 2>&1
+$helmExitCode = $LASTEXITCODE
+
+if ($helmExitCode -ne 0) {
+    Write-ErrorMsg "Helm installation failed"
+    Write-Host $helmOutput -ForegroundColor Red
     exit 1
 }
+
+Write-Success "Monitoring stack deployed successfully"
 
 # Wait for Grafana to be ready
 Write-Info "Waiting for Grafana pod to be ready..."
