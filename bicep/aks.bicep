@@ -81,7 +81,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' = {
         // GPU node pool for LLM inference with autoscaling
         name: 'gpu'
         count: gpuNodeCount
-        minCount: 1              // Minimum nodes for cost efficiency
+        minCount: 0              // Scale to zero when no workload (cost savings!)
         maxCount: 5              // Maximum nodes for scaling (adjust based on quota)
         vmSize: gpuVmSize
         osDiskSizeGB: 256        // Large disk for model caching
