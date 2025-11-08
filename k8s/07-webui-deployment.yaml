@@ -74,6 +74,26 @@ spec:
             - name: DISABLE_RESPONSE_BUFFERING
               value: "true"
 
+            # Additional streaming optimizations for large models
+            - name: OLLAMA_REQUEST_TIMEOUT
+              value: "1800"
+
+            # Disable all response buffering
+            - name: BUFFERING
+              value: "false"
+
+            # Force immediate chunk sending
+            - name: CHUNK_SIZE
+              value: "1"
+
+            # Critical: Disable SSE buffering for real-time streaming
+            - name: SSE_ENABLED
+              value: "true"
+
+            # Force unbuffered I/O
+            - name: PYTHONUNBUFFERED
+              value: "1"
+
             - name: WEBUI_AUTH
               value: "True"  # Enable authentication
             - name: WEBUI_NAME

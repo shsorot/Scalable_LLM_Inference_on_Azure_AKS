@@ -53,11 +53,11 @@ spec:
   # Scaling behavior - conservative for GPU workloads
   behavior:
     scaleDown:
-      stabilizationWindowSeconds: 600  # Wait 10 min before scaling down (models in memory)
+      stabilizationWindowSeconds: 300  # Wait 5 min before scaling down (matches model keep-alive)
       policies:
         - type: Pods
           value: 1
-          periodSeconds: 300  # Remove max 1 pod per 5 minutes
+          periodSeconds: 180  # Remove max 1 pod per 3 minutes
       selectPolicy: Min
 
     scaleUp:

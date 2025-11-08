@@ -213,25 +213,27 @@
       },
       "id": 4,
       "options": {
-        "orientation": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
         "reduceOptions": {
           "values": false,
           "calcs": ["lastNotNull"],
           "fields": ""
         },
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "textMode": "value_and_name"
       },
       "pluginVersion": "9.0.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_GPU_TEMP{Hostname=~\"$node\"}",
-          "legendFormat": "GPU {{gpu}} - {{Hostname}}",
+          "expr": "DCGM_FI_DEV_GPU_TEMP{Hostname=~\"$node\",gpu=\"0\"}",
+          "legendFormat": "{{Hostname}}",
           "refId": "A"
         }
       ],
       "title": "GPU Temperature",
-      "type": "gauge"
+      "type": "stat"
     },
     {
       "datasource": "Prometheus",
@@ -269,25 +271,27 @@
       },
       "id": 5,
       "options": {
-        "orientation": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
         "reduceOptions": {
           "values": false,
           "calcs": ["lastNotNull"],
           "fields": ""
         },
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "textMode": "value_and_name"
       },
       "pluginVersion": "9.0.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_POWER_USAGE{Hostname=~\"$node\"}",
-          "legendFormat": "GPU {{gpu}} - {{Hostname}}",
+          "expr": "DCGM_FI_DEV_POWER_USAGE{Hostname=~\"$node\",gpu=\"0\"}",
+          "legendFormat": "{{Hostname}}",
           "refId": "A"
         }
       ],
       "title": "GPU Power Usage",
-      "type": "gauge"
+      "type": "stat"
     },
     {
       "datasource": "Prometheus",
@@ -393,26 +397,27 @@
       },
       "id": 7,
       "options": {
-        "orientation": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
         "reduceOptions": {
           "values": false,
           "calcs": ["lastNotNull"],
           "fields": ""
         },
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "text": {}
+        "textMode": "value_and_name"
       },
       "pluginVersion": "9.0.0",
       "targets": [
         {
-          "expr": "(DCGM_FI_DEV_FB_USED{Hostname=~\"$node\"} / (DCGM_FI_DEV_FB_USED{Hostname=~\"$node\"} + DCGM_FI_DEV_FB_FREE{Hostname=~\"$node\"})) * 100",
-          "legendFormat": "GPU {{gpu}} - {{Hostname}}",
+          "expr": "(DCGM_FI_DEV_FB_USED{Hostname=~\"$node\",gpu=\"0\"} / (DCGM_FI_DEV_FB_USED{Hostname=~\"$node\",gpu=\"0\"} + DCGM_FI_DEV_FB_FREE{Hostname=~\"$node\",gpu=\"0\"})) * 100",
+          "legendFormat": "{{Hostname}}",
           "refId": "A"
         }
       ],
       "title": "GPU Memory Utilization %",
-      "type": "gauge"
+      "type": "stat"
     },
     {
       "datasource": "Prometheus",
@@ -513,6 +518,31 @@
         "options": [],
         "query": {
           "query": "label_values(DCGM_FI_DEV_FB_USED, Hostname)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": null,
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": "Prometheus",
+        "definition": "label_values(DCGM_FI_DEV_FB_USED{gpu=\"0\"}, Hostname)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "GPU Nodes",
+        "multi": true,
+        "name": "gpu_node",
+        "options": [],
+        "query": {
+          "query": "label_values(DCGM_FI_DEV_FB_USED{gpu=\"0\"}, Hostname)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,

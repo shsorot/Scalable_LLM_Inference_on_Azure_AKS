@@ -101,7 +101,7 @@ spec:
             - name: OLLAMA_MAX_LOADED_MODELS
               value: "0"  # No limit - load as many models as GPU memory allows
             - name: OLLAMA_KEEP_ALIVE
-              value: "30m"  # Keep models loaded for 30 minutes (for scaling tests, increase this)
+              value: "5m"  # Keep models loaded for 5 minutes (allows faster scale-down to zero)
 
             # Optional: HuggingFace token for gated models
             - name: HF_TOKEN

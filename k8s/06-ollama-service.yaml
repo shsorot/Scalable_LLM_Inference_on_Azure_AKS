@@ -19,4 +19,4 @@ spec:
       protocol: TCP
       port: 11434
       targetPort: 11434
-  sessionAffinity: ClientIP  # Sticky sessions for better performance
+  sessionAffinity: None  # Allow round-robin load balancing across Ollama pods
