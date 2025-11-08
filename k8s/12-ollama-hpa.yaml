@@ -17,7 +17,7 @@ spec:
     name: ollama
 
   # Scaling boundaries
-  minReplicas: 1   # Start with 1 pod, maximize single-GPU utilization first
+  minReplicas: 1   # HPA limitation: cannot scale to 0 with Pods metrics (requires External metrics or KEDA)
   maxReplicas: 5   # Scale up when GPU memory exhausted (triggers cluster autoscaler)
 
   # Scaling metrics
