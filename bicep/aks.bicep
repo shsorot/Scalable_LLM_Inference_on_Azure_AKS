@@ -74,8 +74,28 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' = {
           'CriticalAddonsOnly=true:NoSchedule' // Isolate system workloads
         ]
         nodeLabels: {
-          'workload': 'system'
+          workload: 'system'
         }
+      }
+      {
+        // Workload node pool for WebUI, Grafana, and non-GPU application workloads
+        name: 'workload'
+        count: 1
+        minCount: 1              // Keep at least 1 node for WebUI/Grafana availability
+        maxCount: 3              // Scale up to 3 nodes if needed
+        vmSize: 'Standard_D4s_v3' // Cost-effective: 4 vCPU, 16GB RAM, ~$140/month
+        osDiskSizeGB: 128
+        osDiskType: 'Managed'
+        osType: 'Linux'
+        mode: 'User'
+        type: 'VirtualMachineScaleSets'
+        enableAutoScaling: true  // Enable autoscaling for cost optimization
+        maxPods: 30
+        availabilityZones: []
+        nodeLabels: {
+          workload: 'apps'
+        }
+        scaleDownMode: 'Delete'
       }
       {
         // GPU node pool for LLM inference with autoscaling
@@ -96,8 +116,8 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' = {
           'sku=gpu:NoSchedule'   // Prevent non-GPU workloads
         ]
         nodeLabels: {
-          'workload': 'llm'
-          'gpu': 'true'
+          workload: 'llm'
+          gpu: 'true'
           'gpu-type': 'nvidia-t4'
         }
         // Scale-down settings

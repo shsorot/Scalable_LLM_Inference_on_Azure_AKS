@@ -22,16 +22,9 @@ spec:
         app.kubernetes.io/name: open-webui
         app.kubernetes.io/component: web-frontend
     spec:
-      # Run on system nodes (no GPU needed)
+      # Run on workload nodes (dedicated app pool, no GPU needed)
       nodeSelector:
-        workload: system
-
-      # Tolerate system node taints
-      tolerations:
-        - key: "CriticalAddonsOnly"
-          operator: "Equal"
-          value: "true"
-          effect: "NoSchedule"
+        workload: apps
 
       containers:
         - name: open-webui
