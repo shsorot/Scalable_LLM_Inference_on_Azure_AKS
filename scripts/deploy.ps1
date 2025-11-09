@@ -49,18 +49,11 @@ $ProjectRoot = Split-Path -Parent $ScriptRoot
 Set-Location -Path $ProjectRoot -ErrorAction Stop
 Write-Verbose "Working directory: $(Get-Location)"
 
+# Load common functions library
+. (Join-Path $ScriptRoot "Common.ps1")
+
 # Load System.Web assembly for URL encoding
 Add-Type -AssemblyName System.Web
-
-# Function to generate secure random password
-function New-RandomPassword {
-    param(
-        [int]$Length = 16
-    )
-    $chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
-    $password = -join ((1..$Length) | ForEach-Object { $chars[(Get-Random -Maximum $chars.Length)] })
-    return $password
-}
 
 # Trap all errors and show them
 $ErrorActionPreference = "Stop"
@@ -79,28 +72,6 @@ if (-not (Test-Path $BicepMainFile)) {
 if (-not (Test-Path $K8sManifestsDir)) {
     Write-ErrorMsg "K8s directory not found at: $(Resolve-Path $K8sManifestsDir -ErrorAction SilentlyContinue). Current directory: $(Get-Location)"
     exit 1
-}
-
-function Write-StepHeader {
-    param([string]$Message)
-    Write-Host "`n========================================" -ForegroundColor Cyan
-    Write-Host $Message -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-}
-
-function Write-Success {
-    param([string]$Message)
-    Write-Host "[OK] $Message" -ForegroundColor Green
-}
-
-function Write-Info {
-    param([string]$Message)
-    Write-Host "[INFO] $Message" -ForegroundColor Yellow
-}
-
-function Write-ErrorMsg {
-    param([string]$Message)
-    Write-Host "[ERROR] $Message" -ForegroundColor Red
 }
 
 # Display deployment configuration
@@ -192,18 +163,17 @@ if ($rgExists -eq "true") {
 
 Write-StepHeader "Managing Passwords (PostgreSQL & Grafana)"
 
-# Check if Key Vault will exist/exists to retrieve existing passwords
-$keyVaultNamePreview = "${Prefix}kv$(Get-Random -Minimum 1000 -Maximum 9999)"
-# Try to get Key Vault name from existing deployment first
+# Check if Key Vault exists from previous deployment
+$ErrorActionPreference = 'SilentlyContinue'
 $existingKeyVaultName = az deployment group show `
     --name main `
     --resource-group $ResourceGroupName `
     --query 'properties.outputs.keyVaultName.value' `
     --output tsv 2>$null
+$ErrorActionPreference = 'Stop'
 
-if ($existingKeyVaultName) {
-    $keyVaultNamePreview = $existingKeyVaultName
-    Write-Info "Found existing Key Vault: $keyVaultNamePreview"
+if ($existingKeyVaultName -and $LASTEXITCODE -eq 0) {
+    Write-Info "Found existing Key Vault: $existingKeyVaultName"
 }
 
 # Try to retrieve existing passwords from Key Vault
@@ -212,15 +182,8 @@ $existingGrafanaPassword = $null
 
 if ($existingKeyVaultName) {
     Write-Info "Checking for existing passwords in Key Vault..."
-    $existingPostgresPassword = az keyvault secret show `
-        --vault-name $existingKeyVaultName `
-        --name "postgres-admin-password" `
-        --query value -o tsv 2>$null
-
-    $existingGrafanaPassword = az keyvault secret show `
-        --vault-name $existingKeyVaultName `
-        --name "grafana-admin-password" `
-        --query value -o tsv 2>$null
+    $existingPostgresPassword = Get-KeyVaultSecret -VaultName $existingKeyVaultName -SecretName "postgres-admin-password"
+    $existingGrafanaPassword = Get-KeyVaultSecret -VaultName $existingKeyVaultName -SecretName "grafana-admin-password"
 }
 
 # Use existing or generate new PostgreSQL password
@@ -241,11 +204,9 @@ if ($existingGrafanaPassword) {
     Write-Success "Using existing Grafana password from Key Vault"
 } else {
     # Generate secure random password for Grafana
-    $GrafanaPassword = New-RandomPassword -Length 16
+    $GrafanaPassword = New-RandomPassword -Length 16 -IncludeSpecialChars
     Write-Success "Generated new Grafana admin password (will be stored in Key Vault)"
-}
-
-Write-Info "Deploying Bicep template (this takes 8-10 minutes)..."
+}Write-Info "Deploying Bicep template (this takes 8-10 minutes)..."
 Write-Info "Progress will be shown below. Please wait..."
 Write-Host ""
 
@@ -263,18 +224,11 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Success "Infrastructure deployed"
 
-# Get deployment outputs
-Write-Info "Retrieving deployment outputs..."
-$deploymentOutput = az deployment group show `
-    --name main `
-    --resource-group $ResourceGroupName `
-    --query 'properties.outputs' `
-    --output json
+# Get deployment outputs using Common.ps1 function
+$deployment = Get-DeploymentOutput -ResourceGroup $ResourceGroupName -DeploymentName "main"
 
-try {
-    $deployment = $deploymentOutput | ConvertFrom-Json
-} catch {
-    Write-ErrorMsg "Failed to parse deployment output"
+if (-not $deployment) {
+    Write-ErrorMsg "Failed to retrieve deployment outputs"
     exit 1
 }
 
@@ -295,24 +249,8 @@ Write-Info "PostgreSQL Database: $postgresDatabaseName"
 
 Write-StepHeader "Storing Secrets in Key Vault"
 
-Write-Info "Assigning Key Vault Secrets Officer role to current user..."
-$currentUserId = az ad signed-in-user show --query id -o tsv
-$keyVaultResourceId = az keyvault show --name $keyVaultName --resource-group $ResourceGroupName --query id -o tsv
-
-az role assignment create `
-    --assignee $currentUserId `
-    --role "Key Vault Secrets Officer" `
-    --scope $keyVaultResourceId `
-    --output none 2>&1 | Out-Null
-
-if ($LASTEXITCODE -eq 0) {
-    Write-Success "Key Vault Secrets Officer role assigned"
-    Write-Info "Waiting 30 seconds for RBAC propagation..."
-    Start-Sleep -Seconds 30
-} else {
-    Write-Warning "Failed to assign Key Vault role (may already exist). Waiting 15 seconds for propagation..."
-    Start-Sleep -Seconds 15
-}
+# Use Common.ps1 function to set RBAC access
+Set-KeyVaultRBACAccess -VaultName $keyVaultName -ResourceGroup $ResourceGroupName -WaitSeconds 30
 
 # Only store PostgreSQL password if it's a new password
 if (-not $existingPostgresPassword) {
@@ -396,7 +334,8 @@ if (-not $clusterReady) {
 }
 
 Write-Info "Assigning Azure Kubernetes Service RBAC Cluster Admin role to current user..."
-# $currentUserId already retrieved earlier for Key Vault
+# Get current user ID for RBAC assignments
+$currentUserId = az ad signed-in-user show --query id -o tsv
 $aksResourceId = az aks show --resource-group $ResourceGroupName --name $aksClusterName --query id -o tsv
 
 az role assignment create `
@@ -797,7 +736,7 @@ try {
 }
 
 Write-Info "Retrieving PostgreSQL connection details..."
-$pgPassword = az keyvault secret show --vault-name $keyVaultName --name postgres-admin-password --query value -o tsv 2>$null
+$pgPassword = Get-KeyVaultSecret -VaultName $keyVaultName -SecretName "postgres-admin-password"
 
 if ([string]::IsNullOrWhiteSpace($pgPassword)) {
     Write-Warning "Could not retrieve PostgreSQL password from Key Vault"
@@ -957,7 +896,7 @@ Write-StepHeader "Deploying Monitoring Stack (Prometheus + Grafana)"
 # ================================================================================
 Write-Info "Creating Grafana database in PostgreSQL..."
 
-$pgPassword = az keyvault secret show --vault-name $keyVaultName --name postgres-admin-password --query value -o tsv 2>$null
+$pgPassword = Get-KeyVaultSecret -VaultName $keyVaultName -SecretName "postgres-admin-password"
 
 if ([string]::IsNullOrWhiteSpace($pgPassword)) {
     Write-Warning "Could not retrieve PostgreSQL password from Key Vault"
@@ -1053,8 +992,8 @@ Write-Info "Deploying Prometheus + Grafana via Helm..."
 kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f - | Out-Null
 
 # Get passwords from Key Vault
-$grafanaPassword = az keyvault secret show --vault-name $keyVaultName --name grafana-admin-password --query value -o tsv 2>$null
-$postgresPassword = az keyvault secret show --vault-name $keyVaultName --name postgres-admin-password --query value -o tsv 2>$null
+$grafanaPassword = Get-KeyVaultSecret -VaultName $keyVaultName -SecretName "grafana-admin-password"
+$postgresPassword = Get-KeyVaultSecret -VaultName $keyVaultName -SecretName "postgres-admin-password"
 
 # Add Helm repo
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>&1 | Out-Null
@@ -1075,11 +1014,8 @@ $helmInstallArgs = @(
     "--set", "prometheus.prometheusSpec.retention=7d",
     "--set", "prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.accessModes[0]=ReadWriteOnce",
     "--set", "prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage=20Gi",
-    "--set", "prometheusOperator.admissionWebhooks.patch.nodeSelector.workload=system",
-    "--set", "prometheusOperator.admissionWebhooks.patch.tolerations[0].key=CriticalAddonsOnly",
-    "--set", "prometheusOperator.admissionWebhooks.patch.tolerations[0].operator=Equal",
-    "--set", "prometheusOperator.admissionWebhooks.patch.tolerations[0].value=true",
-    "--set", "prometheusOperator.admissionWebhooks.patch.tolerations[0].effect=NoSchedule"
+    "--timeout", "10m",
+    "--wait"
 )
 
 # Add PostgreSQL configuration if password is available
@@ -1097,13 +1033,46 @@ if (-not [string]::IsNullOrWhiteSpace($postgresPassword)) {
     Write-Info "Using default SQLite database for Grafana"
 }
 
+# Temporarily disable ErrorActionPreference to handle helm command errors manually
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+
 $helmOutput = & helm $helmInstallArgs 2>&1
 $helmExitCode = $LASTEXITCODE
 
+$ErrorActionPreference = $previousErrorActionPreference
+
 if ($helmExitCode -ne 0) {
-    Write-ErrorMsg "Helm installation failed"
-    Write-Host $helmOutput -ForegroundColor Red
-    exit 1
+    Write-Warning "Helm installation failed on first attempt, checking for partial installation..."
+    Write-Host $helmOutput -ForegroundColor Yellow
+
+    # Check if there's a failed release
+    $failedRelease = helm list -n monitoring -o json 2>$null | ConvertFrom-Json | Where-Object { $_.name -eq "monitoring" -and $_.status -eq "failed" }
+
+    if ($failedRelease) {
+        Write-Info "Found failed release, cleaning up and retrying..."
+        helm uninstall monitoring -n monitoring 2>&1 | Out-Null
+        Start-Sleep -Seconds 5
+
+        Write-Info "Retrying Helm installation..."
+        $ErrorActionPreference = 'Continue'
+        $helmOutput = & helm $helmInstallArgs 2>&1
+        $helmExitCode = $LASTEXITCODE
+        $ErrorActionPreference = $previousErrorActionPreference
+
+        if ($helmExitCode -ne 0) {
+            Write-ErrorMsg "Helm installation failed after retry"
+            Write-Host $helmOutput -ForegroundColor Red
+            exit 1
+        }
+        Write-Success "Monitoring stack deployed successfully (after retry)"
+    } else {
+        Write-ErrorMsg "Helm installation failed"
+        Write-Host $helmOutput -ForegroundColor Red
+        exit 1
+    }
+} else {
+    Write-Success "Monitoring stack deployed successfully"
 }
 
 Write-Success "Monitoring stack deployed successfully"
@@ -1240,7 +1209,7 @@ $elapsed = 0
 $crdReady = $false
 
 while ($elapsed -lt $maxWait) {
-    $crdStatus = kubectl get crd servicemonitors.monitoring.coreos.com -o jsonpath='{.status.conditions[?(@.type=="Established")].status}' 2>$null
+    $crdStatus = kubectl get crd servicemonitors.monitoring.coreos.com -o jsonpath='{.status.conditions[?(@.type==''Established'')].status}' 2>$null
     if ($crdStatus -eq "True") {
         $crdReady = $true
         Write-Success "ServiceMonitor CRD is ready"

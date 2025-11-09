@@ -13,6 +13,8 @@ All scripts use a common library (`Common.ps1`) that provides standardized loggi
 | **deploy.ps1** | Full infrastructure deployment | Main deployment script |
 | **cleanup.ps1** | Resource cleanup | Tear down infrastructure |
 | **preload-multi-models.ps1** | Download models | Pre-load LLM models |
+| **scale-ollama-to-zero.ps1** | Manual scale-to-zero | Scale Ollama pods to 0 |
+| **update-dashboard.ps1** | Update Grafana dashboards | Upload dashboard JSON files |
 | **verify-deployment-ready.ps1** | Verify deployment | Check deployment status |
 | **verify-gpu-metrics.ps1** | Check GPU metrics | Validate GPU monitoring |
 
@@ -34,8 +36,18 @@ Provides shared functions for all scripts:
 - `Test-AzureConnection` - Verify Azure CLI auth
 - `Test-KubernetesConnection` - Verify kubectl connection
 
+### Password & Security Functions
+- `New-RandomPassword` - Generate secure random passwords
+- `Get-KeyVaultSecret` - Retrieve secrets from Key Vault with error handling
+- `Set-KeyVaultRBACAccess` - Assign Key Vault Secrets Officer role
+
+### Helm Functions
+- `Deploy-HelmChart` - Deploy or upgrade Helm charts with standard error handling
+- `Get-HelmReleaseStatus` - Get the status of a Helm release
+
 ### Azure Functions
 - `Get-AKSCredentials` - Get AKS cluster credentials
+- `Get-DeploymentOutput` - Get outputs from Azure deployment
 
 ### Kubernetes Functions
 - `Wait-ForPodReady` - Wait for pod readiness

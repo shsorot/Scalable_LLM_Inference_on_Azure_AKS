@@ -261,6 +261,239 @@ function Get-PodName {
 
 #endregion
 
+#region Password & Security Functions
+
+function New-RandomPassword {
+    <#
+    .SYNOPSIS
+        Generate a secure random password
+    #>
+    param(
+        [Parameter(Mandatory=$false)]
+        [int]$Length = 16,
+
+        [Parameter(Mandatory=$false)]
+        [switch]$IncludeSpecialChars
+    )
+
+    $chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    if ($IncludeSpecialChars) {
+        $chars += "!@#$%^&*"
+    }
+
+    $password = -join ((1..$Length) | ForEach-Object {
+        $chars[(Get-Random -Maximum $chars.Length)]
+    })
+
+    return $password
+}
+
+function Get-KeyVaultSecret {
+    <#
+    .SYNOPSIS
+        Get a secret from Azure Key Vault with error handling
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$VaultName,
+
+        [Parameter(Mandatory=$true)]
+        [string]$SecretName
+    )
+
+    try {
+        $secret = az keyvault secret show `
+            --vault-name $VaultName `
+            --name $SecretName `
+            --query value -o tsv 2>$null
+
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($secret)) {
+            return $secret
+        }
+    }
+    catch {
+        # Secret doesn't exist or access denied
+    }
+
+    return $null
+}
+
+function Set-KeyVaultRBACAccess {
+    <#
+    .SYNOPSIS
+        Assign Key Vault Secrets Officer role to current user
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$VaultName,
+
+        [Parameter(Mandatory=$true)]
+        [string]$ResourceGroup,
+
+        [Parameter(Mandatory=$false)]
+        [int]$WaitSeconds = 30
+    )
+
+    Write-Info "Assigning Key Vault Secrets Officer role..."
+
+    $currentUserId = az ad signed-in-user show --query id -o tsv
+    $keyVaultResourceId = az keyvault show `
+        --name $VaultName `
+        --resource-group $ResourceGroup `
+        --query id -o tsv
+
+    az role assignment create `
+        --assignee $currentUserId `
+        --role "Key Vault Secrets Officer" `
+        --scope $keyVaultResourceId `
+        --output none 2>&1 | Out-Null
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Key Vault Secrets Officer role assigned"
+        Write-Info "Waiting $WaitSeconds seconds for RBAC propagation..."
+        Start-Sleep -Seconds $WaitSeconds
+        return $true
+    }
+    else {
+        Write-Warning "Failed to assign role (may already exist). Waiting for propagation..."
+        Start-Sleep -Seconds ([math]::Max($WaitSeconds / 2, 15))
+        return $false
+    }
+}
+
+#endregion
+
+#region Helm Functions
+
+function Deploy-HelmChart {
+    <#
+    .SYNOPSIS
+        Deploy or upgrade a Helm chart with standard error handling
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ReleaseName,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Chart,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Namespace,
+
+        [Parameter(Mandatory=$false)]
+        [hashtable]$Values = @{},
+
+        [Parameter(Mandatory=$false)]
+        [string]$ValuesFile,
+
+        [Parameter(Mandatory=$false)]
+        [int]$TimeoutMinutes = 10
+    )
+
+    $helmArgs = @(
+        "upgrade", "--install", $ReleaseName, $Chart,
+        "--namespace", $Namespace,
+        "--wait",
+        "--timeout", "${TimeoutMinutes}m"
+    )
+
+    # Add values from hashtable
+    foreach ($key in $Values.Keys) {
+        $helmArgs += @("--set", "$key=$($Values[$key])")
+    }
+
+    # Add values file if provided
+    if ($ValuesFile -and (Test-Path $ValuesFile)) {
+        $helmArgs += @("-f", $ValuesFile)
+    }
+
+    Write-Info "Deploying Helm chart: $ReleaseName ($Chart)..."
+    $ErrorActionPreference = 'Continue'
+    $output = & helm $helmArgs 2>&1
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+
+    if ($exitCode -ne 0) {
+        Write-ErrorMsg "Helm deployment failed for $ReleaseName"
+        Write-Host $output -ForegroundColor Red
+        return $false
+    }
+
+    Write-Success "Helm chart deployed: $ReleaseName"
+    return $true
+}
+
+function Get-HelmReleaseStatus {
+    <#
+    .SYNOPSIS
+        Get the status of a Helm release
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ReleaseName,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Namespace
+    )
+
+    $releases = helm list -n $Namespace -o json 2>$null | ConvertFrom-Json
+    $release = $releases | Where-Object { $_.name -eq $ReleaseName }
+
+    if ($release) {
+        return @{
+            Name = $release.name
+            Status = $release.status
+            Revision = $release.revision
+            Updated = $release.updated
+        }
+    }
+
+    return $null
+}
+
+#endregion
+
+#region Azure Deployment Functions
+
+function Get-DeploymentOutput {
+    <#
+    .SYNOPSIS
+        Get outputs from an Azure deployment
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ResourceGroup,
+
+        [Parameter(Mandatory=$false)]
+        [string]$DeploymentName = "main"
+    )
+
+    Write-Info "Retrieving deployment outputs..."
+
+    $output = az deployment group show `
+        --name $DeploymentName `
+        --resource-group $ResourceGroup `
+        --query 'properties.outputs' `
+        --output json
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-ErrorMsg "Failed to retrieve deployment outputs"
+        return $null
+    }
+
+    try {
+        $deployment = $output | ConvertFrom-Json
+        Write-Success "Deployment outputs retrieved"
+        return $deployment
+    }
+    catch {
+        Write-ErrorMsg "Failed to parse deployment output"
+        return $null
+    }
+}
+
+#endregion
+
 #region Utility Functions
 
 function Confirm-Action {

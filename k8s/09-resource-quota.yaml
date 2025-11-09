@@ -28,7 +28,7 @@ spec:
 
     # Limit storage claims
     persistentvolumeclaims: "5"  # Max 5 PVCs
-    requests.storage: "500Gi"    # Max total storage
+    requests.storage: "1536Gi"   # Max total storage (1TB models + 20GB webui + overhead)
 
     # Limit services (prevent accidental multiple LoadBalancers)
     services.loadbalancers: "1"  # Only 1 public IP

@@ -384,27 +384,18 @@ if (-not $KeepResourceGroup) {
         Write-Host "  [INFO] Resource group '$resourceGroup' not found (already deleted or never created)" -ForegroundColor Gray
     }
 
-    # Purge soft-deleted Key Vaults
-    Write-Host "`n[2.5/2] Checking for soft-deleted Key Vaults to purge..." -ForegroundColor Green
-    Write-Host "  -> Looking for Key Vaults with prefix '$Prefix'..." -ForegroundColor Gray
+    # Skip purging soft-deleted Key Vaults (resources can be recovered if needed)
+    Write-Host "`n[2.5/2] Skipping Key Vault purge (resources remain in soft-delete state for 90 days)" -ForegroundColor Yellow
+    Write-Host "  -> Soft-deleted Key Vaults can be recovered during this period" -ForegroundColor Gray
+    Write-Host "  -> To manually purge later: az keyvault purge --name <vault-name> --location <location>" -ForegroundColor Gray
 
-    # Updated pattern to match actual Key Vault naming (contains prefix, not starts with)
-    $deletedVaults = az keyvault list-deleted --query "[?contains(name, '${Prefix}')].{Name:name, Location:properties.location}" -o json 2>$null | ConvertFrom-Json
-
-    if ($deletedVaults -and $deletedVaults.Count -gt 0) {
-        Write-Host "  -> Found $($deletedVaults.Count) soft-deleted Key Vault(s)" -ForegroundColor Yellow
-        foreach ($vault in $deletedVaults) {
-            Write-Host "     Purging: $($vault.Name) in $($vault.Location)..." -ForegroundColor Gray
-            az keyvault purge --name $vault.Name --location $vault.Location 2>&1 | Out-Null
-            if ($?) {
-                Write-Host "     [OK] Purged: $($vault.Name)" -ForegroundColor Green
-            } else {
-                Write-Host "     [WARN] Failed to purge: $($vault.Name)" -ForegroundColor Yellow
-            }
-        }
-    } else {
-        Write-Host "  [INFO] No soft-deleted Key Vaults found" -ForegroundColor Gray
-    }
+    # Commented out automatic purge
+    # $deletedVaults = az keyvault list-deleted --query "[?contains(name, '${Prefix}')].{Name:name, Location:properties.location}" -o json 2>$null | ConvertFrom-Json
+    # if ($deletedVaults -and $deletedVaults.Count -gt 0) {
+    #     foreach ($vault in $deletedVaults) {
+    #         az keyvault purge --name $vault.Name --location $vault.Location 2>&1 | Out-Null
+    #     }
+    # }
 } else {
     Write-Host "`n[2/2] Skipping Azure resource group deletion (KeepResourceGroup flag set)" -ForegroundColor Yellow
     Write-Host "  -> Azure infrastructure remains: AKS cluster, Key Vault, Storage" -ForegroundColor Gray
